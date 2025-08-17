@@ -1,7 +1,7 @@
 """Configuration management"""
 import os
 from typing import List, Optional
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
