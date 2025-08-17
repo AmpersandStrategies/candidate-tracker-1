@@ -16,7 +16,6 @@ class DatabaseClient:
     async def get_pool(self):
         """Get asyncpg connection pool"""
         if not self._pool:
-            # Use individual parameters instead of connection string
             self._pool = await asyncpg.create_pool(
                 host="db.cqihxgedvmnqauygtoql.supabase.co",
                 port=5432,
@@ -25,7 +24,8 @@ class DatabaseClient:
                 database="postgres",
                 min_size=1,
                 max_size=10,
-                timeout=60
+                timeout=60,
+                ssl="require"
             )
         return self._pool
     
