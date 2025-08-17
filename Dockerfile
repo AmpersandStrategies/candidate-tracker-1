@@ -25,4 +25,5 @@ USER app
 
 EXPOSE 8000
 
-CMD ["bash", "-lc", "python -m app.db.migrate && python -m app.register && prefect worker start --pool default"]
+# Skip database migration for now, just run the API
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
