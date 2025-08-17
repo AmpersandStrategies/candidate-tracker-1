@@ -17,11 +17,10 @@ class DatabaseClient:
         """Get asyncpg connection pool"""
         if not self._pool:
             # Get proper database URL from Supabase
-            # Extract project ID from Supabase URL
             project_id = settings.supabase_url.split('//')[1].split('.')[0]
             
-            # Construct proper PostgreSQL connection string
-            db_url = f"postgresql://postgres:{settings.supabase_service_role_key}@db.{project_id}.supabase.co:5432/postgres"
+            # Use database password, not service role key
+            db_url = f"postgresql://postgres:{settings.database_password}@db.{project_id}.supabase.co:5432/postgres"
             
             self._pool = await asyncpg.create_pool(
                 db_url,
