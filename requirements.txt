@@ -5,6 +5,7 @@ asyncpg>=0.29.0
 psycopg2-binary>=2.9.0
 prefect>=2.14.0
 pydantic>=2.5.0
+pydantic-settings>=2.0.0
 httpx>=0.25.0
 requests>=2.31.0
 playwright>=1.40.0
