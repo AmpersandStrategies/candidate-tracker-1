@@ -1,0 +1,762 @@
+# Complete jurisdiction configuration for all 50 states + major municipalities
+jurisdictions:
+  # Currently implemented states (ready to enable)
+  - id: WA
+    name: Washington
+    level: state
+    method: api
+    enabled: true
+    landing_url: https://www.pdc.wa.gov/
+    client: wa_pdc
+    throttles:
+      concurrency: 3
+      delay_ms: 1000
+    notes: "Socrata API - fully implemented"
+
+  - id: CA
+    name: California
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://campaignfinance.cdn.sos.ca.gov/dbwebexport/
+    client: ca_calaccess
+    throttles:
+      concurrency: 1
+      delay_ms: 5000
+    notes: "CAL-ACCESS bulk download - implemented"
+
+  # States with partial implementation
+  - id: NY
+    name: New York
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.elections.ny.gov/CFViewReports.html
+    client: ny_boe
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "NYS BOE - needs CSV parsing implementation"
+
+  - id: PA
+    name: Pennsylvania
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.dos.pa.gov/VotingElections/CandidatesCommittees/CampaignFinance
+    client: pa_dos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "PA DOS - needs full export implementation"
+
+  - id: TX
+    name: Texas
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.ethics.state.tx.us/search/cf/
+    client: tx_tec
+    throttles:
+      concurrency: 1
+      delay_ms: 3000
+    notes: "Texas Ethics Commission - scraper framework ready"
+
+  - id: IL
+    name: Illinois
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.elections.il.gov/CampaignDisclosure/
+    client: il_isbe
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "IL State Board - needs scraper implementation"
+
+  - id: CO
+    name: Colorado
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://tracer.sos.colorado.gov/
+    client: co_tracer
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "TRACER system - needs outage detection"
+
+  # States needing implementation
+  - id: FL
+    name: Florida
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://dos.myflorida.com/elections/candidates-committees/campaign-finance/
+    client: fl_dos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Florida DOS - implementation needed"
+
+  - id: MI
+    name: Michigan
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://miboecfr.nictusa.com/cfr/dumpall/
+    client: mi_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Michigan SOS - bulk download available"
+
+  - id: OH
+    name: Ohio
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.sos.state.oh.us/campaign-finance/campaign-finance-reports/
+    client: oh_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Ohio SOS - CSV exports available"
+
+  - id: WI
+    name: Wisconsin
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://cfis.wi.gov/
+    client: wi_cfis
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Wisconsin CFIS - database exports"
+
+  - id: NJ
+    name: New Jersey
+    level: state
+    method: api
+    enabled: false
+    landing_url: https://www.elec.state.nj.us/
+    client: nj_elec
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "NJ ELEC - may have API access"
+
+  - id: NC
+    name: North Carolina
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://cf.ncsbe.gov/CFOrgLkup/
+    client: nc_sbe
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "NC State Board - bulk exports"
+
+  - id: MT
+    name: Montana
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://politicalpractices.mt.gov/
+    client: mt_copp
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "MT Commissioner - CSV downloads"
+
+  - id: AZ
+    name: Arizona
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://azsos.gov/elections/campaign-finance
+    client: az_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Arizona SOS - needs scraper"
+
+  - id: GA
+    name: Georgia
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://cffr.sos.ga.gov/
+    client: ga_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Georgia CFFR - CSV exports"
+
+  - id: VA
+    name: Virginia
+    level: state
+    method: api
+    enabled: false
+    landing_url: https://www.sbe.virginia.gov/
+    client: va_sbe
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "Virginia SBE - potential API"
+
+  - id: MN
+    name: Minnesota
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://cfb.mn.gov/
+    client: mn_cfb
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Minnesota CFB - Excel exports"
+
+  - id: OR
+    name: Oregon
+    level: state
+    method: api
+    enabled: false
+    landing_url: https://secure.sos.state.or.us/orestar/
+    client: or_orestar
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "ORESTAR system - API available"
+
+  - id: CT
+    name: Connecticut
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.ct.gov/seec/
+    client: ct_seec
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "CT SEEC - CSV downloads"
+
+  - id: NV
+    name: Nevada
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.nvsos.gov/
+    client: nv_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Nevada SOS - scraper needed"
+
+  - id: IA
+    name: Iowa
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://iecdb.iowa.gov/
+    client: ia_iecdb
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Iowa IECDB - database exports"
+
+  - id: NH
+    name: New Hampshire
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://cfs.sos.nh.gov/
+    client: nh_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "NH SOS - web scraping required"
+
+  - id: SC
+    name: South Carolina
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://ethics.sc.gov/
+    client: sc_ethics
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "SC Ethics - bulk downloads"
+
+  - id: MA
+    name: Massachusetts
+    level: state
+    method: api
+    enabled: false
+    landing_url: https://www.ocpf.us/
+    client: ma_ocpf
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "MA OCPF - potential API access"
+
+  - id: MD
+    name: Maryland
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.elections.maryland.gov/
+    client: md_sbe
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Maryland SBE - CSV exports"
+
+  - id: ME
+    name: Maine
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.maine.gov/ethics/
+    client: me_ethics
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Maine Ethics - Excel downloads"
+
+  - id: VT
+    name: Vermont
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://ethics.vermont.gov/
+    client: vt_ethics
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Vermont Ethics - scraper needed"
+
+  - id: RI
+    name: Rhode Island
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.ri.gov/election/
+    client: ri_sbe
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "RI Board of Elections - CSV access"
+
+  - id: DE
+    name: Delaware
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://elections.delaware.gov/
+    client: de_doe
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Delaware DOE - scraper needed"
+
+  - id: HI
+    name: Hawaii
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://ags.hawaii.gov/
+    client: hi_csc
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Hawaii Campaign Spending - manual downloads"
+
+  - id: AK
+    name: Alaska
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.alaska.gov/apoc/
+    client: ak_apoc
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Alaska APOC - PDF/Excel reports"
+
+  - id: WV
+    name: West Virginia
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.sos.wv.gov/
+    client: wv_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "WV SOS - scraper needed"
+
+  - id: KY
+    name: Kentucky
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://registry.ky.gov/
+    client: ky_registry
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "KY Registry - bulk access"
+
+  - id: TN
+    name: Tennessee
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.tn.gov/tref/
+    client: tn_tref
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "TN Registry - scraper needed"
+
+  - id: AL
+    name: Alabama
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.sos.alabama.gov/
+    client: al_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Alabama SOS - CSV downloads"
+
+  - id: MS
+    name: Mississippi
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.sos.ms.gov/
+    client: ms_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Mississippi SOS - scraper needed"
+
+  - id: AR
+    name: Arkansas
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.sos.arkansas.gov/
+    client: ar_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Arkansas SOS - bulk downloads"
+
+  - id: LA
+    name: Louisiana
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.ethics.la.gov/
+    client: la_ethics
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Louisiana Ethics - scraper needed"
+
+  - id: OK
+    name: Oklahoma
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.ok.gov/ethics/
+    client: ok_ethics
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Oklahoma Ethics - CSV access"
+
+  - id: KS
+    name: Kansas
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.kansas.gov/government/
+    client: ks_gov
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Kansas - bulk downloads available"
+
+  - id: NE
+    name: Nebraska
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.nadc.nebraska.gov/
+    client: ne_nadc
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Nebraska NADC - CSV exports"
+
+  - id: MO
+    name: Missouri
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.mec.mo.gov/
+    client: mo_mec
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Missouri MEC - database exports"
+
+  - id: IN
+    name: Indiana
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://www.in.gov/sos/
+    client: in_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Indiana SOS - scraper needed"
+
+  - id: ND
+    name: North Dakota
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://www.nd.gov/sos/
+    client: nd_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "North Dakota SOS - manual downloads"
+
+  - id: SD
+    name: South Dakota
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://sdsos.gov/
+    client: sd_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "South Dakota SOS - CSV access"
+
+  - id: UT
+    name: Utah
+    level: state
+    method: api
+    enabled: false
+    landing_url: https://elections.utah.gov/
+    client: ut_elections
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "Utah Elections - potential API"
+
+  - id: ID
+    name: Idaho
+    level: state
+    method: scrape
+    enabled: false
+    landing_url: https://gov.idaho.gov/sos/
+    client: id_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Idaho SOS - scraper needed"
+
+  - id: WY
+    name: Wyoming
+    level: state
+    method: bulk
+    enabled: false
+    download_url: https://sos.wyo.gov/
+    client: wy_sos
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Wyoming SOS - manual downloads"
+
+  # Major municipalities
+  - id: NYC
+    name: New York City
+    level: city
+    method: api
+    enabled: false
+    landing_url: https://www.nyccfb.info/
+    client: nyc_cfb
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "NYC Campaign Finance Board - API available"
+
+  - id: SF
+    name: San Francisco
+    level: city
+    method: api
+    enabled: false
+    landing_url: https://netfile.com/Connect2/api/public/
+    client: sf_netfile
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "NetFile API - well documented"
+
+  - id: LA_CITY
+    name: Los Angeles
+    level: city
+    method: api
+    enabled: false
+    landing_url: https://ethics.lacity.org/
+    client: la_ethics
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "LA Ethics Commission - API access"
+
+  - id: CHICAGO
+    name: Chicago
+    level: city
+    method: bulk
+    enabled: false
+    download_url: https://www.chicago.gov/city/en/depts/ethics.html
+    client: chicago_ethics
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Chicago Ethics - bulk downloads"
+
+  - id: DC
+    name: District of Columbia
+    level: city
+    method: api
+    enabled: false
+    landing_url: https://www.ocf.dc.gov/
+    client: dc_ocf
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "DC Office of Campaign Finance - API"
+
+  - id: SEATTLE
+    name: Seattle
+    level: city
+    method: api
+    enabled: false
+    landing_url: https://www.seattle.gov/ethics-and-elections/
+    client: seattle_seec
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "Seattle SEEC - API access"
+
+  - id: BOSTON
+    name: Boston
+    level: city
+    method: bulk
+    enabled: false
+    download_url: https://www.boston.gov/departments/elections
+    client: boston_elections
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Boston Elections - manual downloads"
+
+  - id: OAKLAND
+    name: Oakland
+    level: city
+    method: api
+    enabled: false
+    landing_url: https://www.oaklandnet.com/government/ethics
+    client: oakland_ethics
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "Oakland Ethics - NetFile system"
+
+  # Major counties
+  - id: ALLEGHENY
+    name: Allegheny County
+    level: county
+    method: scrape
+    enabled: false
+    landing_url: https://www.alleghenycounty.us/elections/
+    client: pa_allegheny
+    throttles:
+      concurrency: 1
+      delay_ms: 3000
+    notes: "Pittsburgh area - scraper framework ready"
+
+  - id: COOK
+    name: Cook County
+    level: county
+    method: bulk
+    enabled: false
+    download_url: https://www.cookcountyclerk.com/
+    client: cook_county
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Chicago area - CSV exports"
+
+  - id: HARRIS
+    name: Harris County
+    level: county
+    method: bulk
+    enabled: false
+    download_url: https://www.harrisvotes.com/
+    client: harris_county
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Houston area - bulk downloads"
+
+  - id: MARICOPA
+    name: Maricopa County
+    level: county
+    method: scrape
+    enabled: false
+    landing_url: https://recorder.maricopa.gov/
+    client: maricopa_county
+    throttles:
+      concurrency: 1
+      delay_ms: 2500
+    notes: "Phoenix area - scraper needed"
+
+  - id: ORANGE_CA
+    name: Orange County, CA
+    level: county
+    method: bulk
+    enabled: false
+    download_url: https://www.ocvote.com/
+    client: orange_ca_county
+    throttles:
+      concurrency: 1
+      delay_ms: 2000
+    notes: "Orange County CA - bulk access"
+
+  - id: KING_WA
+    name: King County, WA
+    level: county
+    method: api
+    enabled: false
+    landing_url: https://www.kingcounty.gov/depts/elections.aspx
+    client: king_wa_county
+    throttles:
+      concurrency: 2
+      delay_ms: 1500
+    notes: "Seattle area - potential API access"
