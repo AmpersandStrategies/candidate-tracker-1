@@ -16,16 +16,18 @@ class DatabaseClient:
     async def get_pool(self):
         """Get asyncpg connection pool"""
         if not self._pool:
-            # Extract connection details from Supabase URL
-            url = settings.supabase_url.replace("https://", "postgresql://")
-            url = url.replace(".supabase.co", ".supabase.co:5432")
+            # Get proper database URL from Supabase
+            # Extract project ID from Supabase URL
+            project_id = settings.supabase_url.split('//')[1].split('.')[0]
+            
+            # Construct proper PostgreSQL connection string
+            db_url = f"postgresql://postgres:{settings.supabase_service_role_key}@db.{project_id}.supabase.co:5432/postgres"
             
             self._pool = await asyncpg.create_pool(
-                f"{url}/postgres",
-                user="postgres",
-                password=settings.supabase_service_role_key,
+                db_url,
                 min_size=1,
-                max_size=10
+                max_size=10,
+                timeout=60
             )
         return self._pool
     
