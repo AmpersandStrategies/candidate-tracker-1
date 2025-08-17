@@ -3,10 +3,8 @@ import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
 
-# FORCED UPDATE - Railway please use this version!
-
 class Settings(BaseSettings):
-    # Core (UPDATED)
+    # Core
     supabase_url: str
     supabase_service_role_key: str
     
@@ -33,4 +31,26 @@ class Settings(BaseSettings):
     initial_backfill_cycles: str = "2026,2028"
     enable_states: bool = True
     enable_airtable_sync: bool = True
-    ena
+    enable_media_whitelist: bool = True
+    enable_common_names: bool = True
+    enable_ap_elections: bool = False
+    enable_usvote_calendars: bool = False
+    enable_zapier_sync: bool = False
+    enable_push_to_crm: bool = False
+    
+    # Scraper settings
+    scrape_max_concurrency: int = 2
+    scrape_delay_ms: int = 1500
+    scrape_user_agent: str = "AmpersandResearchBot/1.0 (+contact@example.com)"
+    
+    @property
+    def backfill_cycles(self) -> List[int]:
+        """Parse backfill cycles from comma-separated string"""
+        return [int(x.strip()) for x in self.initial_backfill_cycles.split(",")]
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
+
+
+settings = Settings()
