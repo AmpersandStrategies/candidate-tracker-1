@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     supabase_url: str
     supabase_service_role_key: str
+    database_password: str
     prefect_api_url: Optional[str] = None
     prefect_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
