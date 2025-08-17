@@ -13,8 +13,8 @@ RUN pip install playwright && playwright install chromium
 WORKDIR /app
 
 # Install Python dependencies
-COPY pyproject.toml ./
-RUN pip install -e .
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
 
 # Copy application code
 COPY . .
