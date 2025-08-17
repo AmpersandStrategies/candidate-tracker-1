@@ -43,3 +43,4 @@ A production-ready candidate tracking system that ingests campaign finance data 
    ENABLE_STATES=true
    ENABLE_AIRTABLE_SYNC=true
    INITIAL_BACKFILL_CYCLES=2026,2028
+   
