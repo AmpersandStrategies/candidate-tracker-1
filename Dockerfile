@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install playwright browsers
+RUN pip install playwright && playwright install chromium
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY pyproject.toml ./
+RUN pip install -e .
+
+# Copy application code
+COPY . .
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
+USER app
+
+EXPOSE 8000
+
+CMD ["bash", "-lc", "python -m app.db.migrate && python -m app.register && prefect worker start --pool default"]
