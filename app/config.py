@@ -1,4 +1,4 @@
-"""Configuration management"""
+"""Configuration management - updated"""
 import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
