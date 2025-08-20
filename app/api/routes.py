@@ -63,7 +63,35 @@ async def get_filings(
     candidate_id: Optional[str] = None
 ):
     """Get filings with pagination and filtering"""
-    return {"message": "Filings endpoint - database connection needed"}
+    try:
+        # Count total filings
+        if candidate_id:
+            result = self.supabase.table('filings').select('*', count='exact').eq('candidate_id', candidate_id).execute()
+        else:
+            result = self.supabase.table('filings').select('*', count='exact').execute()
+        
+        total_count = result.count or 0
+        
+        # Get paginated filings
+        offset = (page - 1) * size
+        if candidate_id:
+            filings_result = self.supabase.table('filings').select('*').eq('candidate_id', candidate_id).range(offset, offset + size - 1).execute()
+        else:
+            filings_result = self.supabase.table('filings').select('*').range(offset, offset + size - 1).execute()
+        
+        return {
+            "filings": filings_result.data,
+            "total": total_count,
+            "page": page,
+            "size": size
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Database error: {str(e)}",
+            "filings": [],
+            "total": 0
+        }
 
 
 @router.post("/signals")
