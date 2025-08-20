@@ -32,4 +32,4 @@ async def get_candidates(
     office: Optional[str] = None,
     election_cycle: Optional[int] = None
 ):
-    """Get candidates with pagination and fi
+    """Get candidates with pagination and filtering"""
