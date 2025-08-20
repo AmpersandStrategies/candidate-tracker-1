@@ -74,23 +74,119 @@ async def get_candidates(
             "total": 0
         }
 
-@router.get("/debug/db")
-async def debug_database():
-    """Debug database connection"""
+
+@router.get("/filings")
+async def get_filings(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=1000),
+    candidate_id: Optional[str] = None
+):
+    """Get filings with pagination and filtering"""
     try:
-        # Test basic Supabase connection
-        result = db.supabase.table('candidates').select('count').execute()
+        # Build Supabase query
+        query = db.supabase.table('filings').select('*', count='exact')
+        
+        if candidate_id:
+            query = query.eq('candidate_id', candidate_id)
+        
+        # Get count separately
+        count_query = db.supabase.table('filings').select('*', count='exact')
+        if candidate_id:
+            count_query = count_query.eq('candidate_id', candidate_id)
+        
+        count_result = count_query.execute()
+        total_count = count_result.count or 0
+        
+        # Get paginated results
+        offset = (page - 1) * size
+        data_result = query.range(offset, offset + size - 1).execute()
+        
         return {
-            "supabase_connection": "working",
-            "result": str(result),
-            "data": result.data if hasattr(result, 'data') else "no data attr",
-            "count": result.count if hasattr(result, 'count') else "no count attr"
+            "filings": data_result.data,
+            "total": total_count,
+            "page": page,
+            "size": size
         }
+        
     except Exception as e:
         return {
-            "error": str(e),
-            "error_type": str(type(e).__name__)
+            "error": f"Database error: {str(e)}",
+            "filings": [],
+            "total": 0
         }
+
+
+@router.post("/signals")
+async def create_signal(url: str, source: str = "manual"):
+    """Create a new signal from social media post URL"""
+    try:
+        result = db.supabase.table('signals').insert({
+            'source': source,
+            'url': url,
+            'posted_at': datetime.utcnow().isoformat(),
+            'status': 'new'
+        }).execute()
+        
+        return {"signal_id": result.data[0]['signal_id'], "status": "created"}
+        
+    except Exception as e:
+        return {"error": f"Database error: {str(e)}"}
+
+
+@router.get("/collect-fec-data")
+async def collect_fec_data():
+    """Collect real FEC candidates"""
+    try:
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        
+        async with httpx.AsyncClient() as client:
+            # Get 2026 Democratic House candidates
+            response = await client.get(
+                "https://api.open.fec.gov/v1/candidates",
+                params={
+                    "api_key": fec_api_key,
+                    "cycle": 2026,
+                    "party": "DEM",
+                    "office": "H",
+                    "per_page": 50
+                }
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            candidates = data.get("results", [])
+            
+            stored_count = 0
+            for candidate in candidates:
+                try:
+                    result = db.supabase.table('candidates').insert({
+                        'full_name': candidate.get('name', ''),
+                        'party': candidate.get('party', ''),
+                        'jurisdiction_type': 'federal',
+                        'jurisdiction_name': 'United States',
+                        'state': candidate.get('state', ''),
+                        'office': candidate.get('office_full', 'House'),
+                        'district': candidate.get('district', ''),
+                        'election_cycle': 2026,
+                        'incumbent': candidate.get('incumbent_challenge', '') == 'I',
+                        'source_url': f"https://www.fec.gov/data/candidate/{candidate.get('candidate_id', '')}/"
+                    }).execute()
+                    
+                    if result.data:
+                        stored_count += 1
+                        
+                except Exception as e:
+                    continue  # Skip duplicates/errors
+            
+            return {
+                "status": "success",
+                "candidates_found": len(candidates),
+                "candidates_stored": stored_count
+            }
+            
+    except Exception as e:
+        return {"error": f"FEC collection failed: {str(e)}"}
+
 
 @router.get("/add-test-candidate")
 async def add_test_candidate():
@@ -117,91 +213,3 @@ async def add_test_candidate():
         return {
             "error": f"Failed to add test candidate: {str(e)}"
         }
-
-@router.get("/collect-fec-data")
-async def collect_fec_data():
-    """Collect real FEC candidates and sync to Airtable"""
-    import httpx
-    from airtable import Airtable
-    
-    try:
-        fec_api_key = os.environ.get('FEC_API_KEY')
-        airtable_token = os.environ.get('AIRTABLE_TOKEN')
-        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
-        
-        if not airtable_token or not airtable_base_id:
-            return {"error": "Airtable credentials not configured"}
-        
-        # Initialize Airtable
-        airtable = Airtable(airtable_base_id, "Candidates", api_key=airtable_token)
-        
-        async with httpx.AsyncClient() as client:
-            # Get 2026 Democratic House candidates
-            response = await client.get(
-                "https://api.open.fec.gov/v1/candidates",
-                params={
-                    "api_key": fec_api_key,
-                    "cycle": 2026,
-                    "party": "DEM",
-                    "office": "H",
-                    "per_page": 50
-                }
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            candidates = data.get("results", [])
-            
-            stored_count = 0
-            airtable_count = 0
-            
-            for candidate in candidates:
-                try:
-                    # Store in Supabase
-                    result = db.supabase.table('candidates').insert({
-                        'full_name': candidate.get('name', ''),
-                        'party': candidate.get('party', ''),
-                        'jurisdiction_type': 'federal',
-                        'jurisdiction_name': 'United States',
-                        'state': candidate.get('state', ''),
-                        'office': candidate.get('office_full', 'House'),
-                        'district': candidate.get('district', ''),
-                        'election_cycle': 2026,
-                        'incumbent': candidate.get('incumbent_challenge', '') == 'I',
-                        'source_url': f"https://www.fec.gov/data/candidate/{candidate.get('candidate_id', '')}/"
-                    }).execute()
-                    
-                    if result.data:
-                        stored_count += 1
-                        candidate_record = result.data[0]
-                        
-                    # Also store in Airtable
-airtable_record = {
-    "Full Name": candidate_record['full_name'],
-    "Party": candidate_record['party'],
-    "Jurisdiction": candidate_record['jurisdiction_name'],
-    "Office Sought": candidate_record['office'],
-    "Incumbent?": candidate_record['incumbent'],
-    "Preferred Name": candidate_record.get('preferred_name', ''),
-    "Current Position": candidate_record.get('current_position', ''),
-    "Bio Summary": candidate_record.get('bio_summary', ''),
-    "Media Mentions": 0,
-    "Confidence Flag": "High",
-    "Status": "Active"
-}
-                        
-                        airtable.insert(airtable_record)
-                        airtable_count += 1
-                        
-                except Exception as e:
-                    continue  # Skip duplicates/errors
-            
-            return {
-                "status": "success",
-                "candidates_found": len(candidates),
-                "candidates_stored": stored_count,
-                "airtable_synced": airtable_count
-            }
-            
-    except Exception as e:
-        return {"error": f"Collection failed: {str(e)}"}
