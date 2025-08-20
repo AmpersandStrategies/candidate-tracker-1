@@ -21,6 +21,7 @@ async def health_check():
         }
     }
 
+
 @router.get("/candidates")
 async def get_candidates(
     page: int = Query(1, ge=1),
@@ -29,58 +30,30 @@ async def get_candidates(
     office: Optional[str] = None,
     election_cycle: Optional[int] = None
 ):
-    """Get candidates with pagination and filtering"""
+    """Get candidates with pagination and filtering - debug version"""
     try:
-        # Build WHERE clause
-        where_conditions = ["1=1"]
-        params = []
+        # Simple test query first
+        test_result = await db.execute_query("SELECT 1 as test")
         
-        if state:
-            where_conditions.append("state = %s")
-            params.append(state)
-        
-        where_clause = " AND ".join(where_conditions)
-        count_query = f"SELECT COUNT(*) FROM candidates WHERE {where_clause}"
-        
-        print(f"DEBUG: About to execute query: {count_query}")
-        total = await db.execute_query(count_query, *params)
-        
-        return {"candidates": [], "total": 0}
-    except Exception as e:
-        print(f"DEBUG: Database error: {str(e)}")
-        return {"error": f"Database connection failed: {str(e)}"}
-        
-        # Get total count
-        count_query = f"SELECT COUNT(*) FROM candidates WHERE {where_clause}"
-        total = await db.execute_query(count_query, *params)
-        total_count = total[0]['count'] if total else 0
-        
-        # Get paginated results
-        offset = (page - 1) * size
-        param_count += 1
-        params.append(size)
-        param_count += 1
-        params.append(offset)
-        
-        query = f"""
-            SELECT * FROM candidates 
-            WHERE {where_clause}
-            ORDER BY created_at DESC
-            LIMIT ${param_count-1} OFFSET ${param_count}
-        """
-        
-        rows = await db.execute_query(query, *params)
-        candidates = [dict(row) for row in rows]
+        # If that works, try candidates table
+        count_query = "SELECT COUNT(*) FROM candidates"
+        total_result = await db.execute_query(count_query)
         
         return {
-            "candidates": candidates,
-            "total": total_count,
-            "page": page,
-            "size": size
+            "status": "success",
+            "test_query": str(test_result),
+            "total_candidates": str(total_result),
+            "candidates": [],
+            "total": 0
         }
+        
     except Exception as e:
-        logger.error("Error fetching candidates", error=str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        # Return the error details
+        return {
+            "error": f"Database error: {str(e)}",
+            "error_type": str(type(e).__name__),
+            "status": "failed"
+        }
 
 
 @router.get("/filings")
@@ -90,71 +63,10 @@ async def get_filings(
     candidate_id: Optional[str] = None
 ):
     """Get filings with pagination and filtering"""
-    try:
-        where_conditions = ["1=1"]
-        params = []
-        param_count = 0
-        
-        if candidate_id:
-            param_count += 1
-            where_conditions.append(f"candidate_id = ${param_count}")
-            params.append(candidate_id)
-        
-        where_clause = " AND ".join(where_conditions)
-        
-        count_query = f"SELECT COUNT(*) FROM filings WHERE {where_clause}"
-        total = await db.execute_query(count_query, *params)
-        total_count = total[0]['count'] if total else 0
-        
-        offset = (page - 1) * size
-        param_count += 1
-        params.append(size)
-        param_count += 1
-        params.append(offset)
-        
-        query = f"""
-            SELECT * FROM filings 
-            WHERE {where_clause}
-            ORDER BY receipt_date DESC
-            LIMIT ${param_count-1} OFFSET ${param_count}
-        """
-        
-        rows = await db.execute_query(query, *params)
-        filings = [dict(row) for row in rows]
-        
-        return {
-            "filings": filings,
-            "total": total_count,
-            "page": page,
-            "size": size
-        }
-    except Exception as e:
-        logger.error("Error fetching filings", error=str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+    return {"message": "Filings endpoint - database connection needed"}
 
 
 @router.post("/signals")
 async def create_signal(url: str, source: str = "manual"):
     """Create a new signal from social media post URL"""
-    try:
-        query = """
-            INSERT INTO signals (source, url, posted_at, status)
-            VALUES ($1, $2, $3, 'new')
-            RETURNING signal_id
-        """
-        
-        result = await db.execute_query(
-            query,
-            source,
-            url,
-            datetime.utcnow()
-        )
-        
-        if result:
-            return {"signal_id": str(result[0]['signal_id']), "status": "created"}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to create signal")
-            
-    except Exception as e:
-        logger.error("Error creating signal", error=str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+    return {"message": "Signals endpoint - database connection needed"}
