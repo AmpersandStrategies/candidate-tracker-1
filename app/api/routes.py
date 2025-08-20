@@ -30,29 +30,38 @@ async def get_candidates(
     office: Optional[str] = None,
     election_cycle: Optional[int] = None
 ):
-    """Get candidates with pagination and filtering - debug version"""
+    """Get candidates with pagination and filtering"""
     try:
-        # Simple test query first
-        test_result = await db.execute_query("SELECT 1 as test")
+        # Build Supabase query
+        query = db.supabase.table('candidates').select('*', count='exact')
         
-        # If that works, try candidates table
-        count_query = "SELECT COUNT(*) FROM candidates"
-        total_result = await db.execute_query(count_query)
+        if state:
+            query = query.eq('state', state)
+        if office:
+            query = query.ilike('office', f'%{office}%')
+        if election_cycle:
+            query = query.eq('election_cycle', election_cycle)
+        
+        # Get total count
+        count_result = query.execute()
+        total_count = count_result.count or 0
+        
+        # Get paginated results
+        offset = (page - 1) * size
+        data_result = query.range(offset, offset + size - 1).execute()
         
         return {
-            "status": "success",
-            "test_query": str(test_result),
-            "total_candidates": str(total_result),
-            "candidates": [],
-            "total": 0
+            "candidates": data_result.data,
+            "total": total_count,
+            "page": page,
+            "size": size
         }
         
     except Exception as e:
-        # Return the error details
         return {
             "error": f"Database error: {str(e)}",
-            "error_type": str(type(e).__name__),
-            "status": "failed"
+            "candidates": [],
+            "total": 0
         }
 
 
@@ -64,23 +73,22 @@ async def get_filings(
 ):
     """Get filings with pagination and filtering"""
     try:
-        # Count total filings
+        # Build Supabase query
+        query = db.supabase.table('filings').select('*', count='exact')
+        
         if candidate_id:
-            result = self.supabase.table('filings').select('*', count='exact').eq('candidate_id', candidate_id).execute()
-        else:
-            result = self.supabase.table('filings').select('*', count='exact').execute()
+            query = query.eq('candidate_id', candidate_id)
         
-        total_count = result.count or 0
+        # Get total count
+        count_result = query.execute()
+        total_count = count_result.count or 0
         
-        # Get paginated filings
+        # Get paginated results
         offset = (page - 1) * size
-        if candidate_id:
-            filings_result = self.supabase.table('filings').select('*').eq('candidate_id', candidate_id).range(offset, offset + size - 1).execute()
-        else:
-            filings_result = self.supabase.table('filings').select('*').range(offset, offset + size - 1).execute()
+        data_result = query.range(offset, offset + size - 1).execute()
         
         return {
-            "filings": filings_result.data,
+            "filings": data_result.data,
             "total": total_count,
             "page": page,
             "size": size
@@ -97,4 +105,15 @@ async def get_filings(
 @router.post("/signals")
 async def create_signal(url: str, source: str = "manual"):
     """Create a new signal from social media post URL"""
-    return {"message": "Signals endpoint - database connection needed"}
+    try:
+        result = db.supabase.table('signals').insert({
+            'source': source,
+            'url': url,
+            'posted_at': datetime.utcnow().isoformat(),
+            'status': 'new'
+        }).execute()
+        
+        return {"signal_id": result.data[0]['signal_id'], "status": "created"}
+        
+    except Exception as e:
+        return {"error": f"Database error: {str(e)}"}
