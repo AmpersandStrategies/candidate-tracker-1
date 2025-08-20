@@ -175,18 +175,20 @@ async def collect_fec_data():
                         stored_count += 1
                         candidate_record = result.data[0]
                         
-                        # Also store in Airtable
-                        airtable_record = {
-                            "Candidate ID": str(candidate_record['candidate_id']),
-                            "Full Name": candidate_record['full_name'],
-                            "Party": candidate_record['party'],
-                            "Jurisdiction": candidate_record['jurisdiction_name'],
-                            "Office Sought": candidate_record['office'],
-                            "Incumbent?": candidate_record['incumbent'],
-                            "Bio Summary": "",
-                            "Media Mentions": 0,
-                            "Confidence Flag": "High"
-                        }
+                    # Also store in Airtable
+airtable_record = {
+    "Full Name": candidate_record['full_name'],
+    "Party": candidate_record['party'],
+    "Jurisdiction": candidate_record['jurisdiction_name'],
+    "Office Sought": candidate_record['office'],
+    "Incumbent?": candidate_record['incumbent'],
+    "Preferred Name": candidate_record.get('preferred_name', ''),
+    "Current Position": candidate_record.get('current_position', ''),
+    "Bio Summary": candidate_record.get('bio_summary', ''),
+    "Media Mentions": 0,
+    "Confidence Flag": "High",
+    "Status": "Active"
+}
                         
                         airtable.insert(airtable_record)
                         airtable_count += 1
