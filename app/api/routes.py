@@ -3,8 +3,10 @@ from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from datetime import datetime
 from app.db.client import db
-from app.config import settings  # Add this line
 from app.utils.logging import get_logger
+
+logger = get_logger(__name__)
+router = APIRouter()
 
 
 @router.get("/healthz")
@@ -116,34 +118,13 @@ async def create_signal(url: str, source: str = "manual"):
     except Exception as e:
         return {"error": f"Database error: {str(e)}"}
 
-@router.get("/test/fec-sample")
-async def test_fec_sample():
-    """Test endpoint to pull 10 FEC candidates"""
-    try:
-        from app.integrations.fec_client import FECClient
-        
-        # Check if FEC API key is configured
-        fec_api_key = getattr(settings, 'fec_api_key', None)
-        if not fec_api_key:
-            return {"error": "FEC_API_KEY not configured", "status": "failed"}
-        
-        # Initialize FEC client
-        fec_client = FECClient()
-        
-        # Get candidates from 2026 cycle
-        candidates = await fec_client.get_candidates(2026, "DEM")
-        
-        return {
-            "status": "debug",
-            "fec_api_key_configured": bool(fec_api_key),
-            "candidates_retrieved": len(candidates),
-            "first_candidate": candidates[0] if candidates else None,
-            "raw_candidates": candidates[:3]  # Show first 3 for debugging
-        }
-        
-    except Exception as e:
-        return {
-            "error": f"FEC test failed: {str(e)}",
-            "error_type": str(type(e).__name__),
-            "status": "failed"
-        }
+
+@router.get("/test/config")
+async def test_config():
+    """Simple test to check configuration"""
+    import os
+    return {
+        "fec_api_key_set": bool(os.environ.get('FEC_API_KEY')),
+        "supabase_url_set": bool(os.environ.get('SUPABASE_URL')),
+        "environment_vars": list(os.environ.keys())
+    }
