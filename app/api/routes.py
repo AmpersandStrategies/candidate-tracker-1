@@ -34,24 +34,21 @@ async def get_candidates(
         # Build WHERE clause
         where_conditions = ["1=1"]
         params = []
-        param_count = 0
         
         if state:
-            param_count += 1
-            where_conditions.append(f"state = ${param_count}")
+            where_conditions.append("state = %s")
             params.append(state)
-            
-        if office:
-            param_count += 1
-            where_conditions.append(f"office ILIKE ${param_count}")
-            params.append(f"%{office}%")
-            
-        if election_cycle:
-            param_count += 1
-            where_conditions.append(f"election_cycle = ${param_count}")
-            params.append(election_cycle)
         
         where_clause = " AND ".join(where_conditions)
+        count_query = f"SELECT COUNT(*) FROM candidates WHERE {where_clause}"
+        
+        print(f"DEBUG: About to execute query: {count_query}")
+        total = await db.execute_query(count_query, *params)
+        
+        return {"candidates": [], "total": 0}
+    except Exception as e:
+        print(f"DEBUG: Database error: {str(e)}")
+        return {"error": f"Database connection failed: {str(e)}"}
         
         # Get total count
         count_query = f"SELECT COUNT(*) FROM candidates WHERE {where_clause}"
