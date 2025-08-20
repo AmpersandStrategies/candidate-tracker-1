@@ -120,11 +120,20 @@ async def add_test_candidate():
 
 @router.get("/collect-fec-data")
 async def collect_fec_data():
-    """Collect real FEC candidates"""
+    """Collect real FEC candidates and sync to Airtable"""
     import httpx
+    from airtable import Airtable
     
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Airtable credentials not configured"}
+        
+        # Initialize Airtable
+        airtable = Airtable(airtable_base_id, "Candidates", api_key=airtable_token)
         
         async with httpx.AsyncClient() as client:
             # Get 2026 Democratic House candidates
@@ -134,7 +143,7 @@ async def collect_fec_data():
                     "api_key": fec_api_key,
                     "cycle": 2026,
                     "party": "DEM",
-                    "office": "H",  # House
+                    "office": "H",
                     "per_page": 50
                 }
             )
@@ -144,8 +153,11 @@ async def collect_fec_data():
             candidates = data.get("results", [])
             
             stored_count = 0
+            airtable_count = 0
+            
             for candidate in candidates:
                 try:
+                    # Store in Supabase
                     result = db.supabase.table('candidates').insert({
                         'full_name': candidate.get('name', ''),
                         'party': candidate.get('party', ''),
@@ -161,6 +173,23 @@ async def collect_fec_data():
                     
                     if result.data:
                         stored_count += 1
+                        candidate_record = result.data[0]
+                        
+                        # Also store in Airtable
+                        airtable_record = {
+                            "Candidate ID": str(candidate_record['candidate_id']),
+                            "Full Name": candidate_record['full_name'],
+                            "Party": candidate_record['party'],
+                            "Jurisdiction": candidate_record['jurisdiction_name'],
+                            "Office Sought": candidate_record['office'],
+                            "Incumbent?": candidate_record['incumbent'],
+                            "Bio Summary": "",
+                            "Media Mentions": 0,
+                            "Confidence Flag": "High"
+                        }
+                        
+                        airtable.insert(airtable_record)
+                        airtable_count += 1
                         
                 except Exception as e:
                     continue  # Skip duplicates/errors
@@ -168,8 +197,9 @@ async def collect_fec_data():
             return {
                 "status": "success",
                 "candidates_found": len(candidates),
-                "candidates_stored": stored_count
+                "candidates_stored": stored_count,
+                "airtable_synced": airtable_count
             }
             
     except Exception as e:
-        return {"error": f"FEC collection failed: {str(e)}"}
+        return {"error": f"Collection failed: {str(e)}"}
