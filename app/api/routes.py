@@ -3,10 +3,8 @@ from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from datetime import datetime
 from app.db.client import db
+from app.config import settings  # Add this line
 from app.utils.logging import get_logger
-
-logger = get_logger(__name__)
-router = APIRouter()
 
 
 @router.get("/healthz")
