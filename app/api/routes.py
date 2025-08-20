@@ -33,3 +33,21 @@ async def get_candidates(
     election_cycle: Optional[int] = None
 ):
     """Get candidates with pagination and filtering"""
+
+@router.get("/debug/db")
+async def debug_database():
+    """Debug database connection"""
+    try:
+        # Test basic Supabase connection
+        result = db.supabase.table('candidates').select('count').execute()
+        return {
+            "supabase_connection": "working",
+            "result": str(result),
+            "data": result.data if hasattr(result, 'data') else "no data attr",
+            "count": result.count if hasattr(result, 'count') else "no count attr"
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": str(type(e).__name__)
+        }
