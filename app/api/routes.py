@@ -91,3 +91,29 @@ async def debug_database():
             "error": str(e),
             "error_type": str(type(e).__name__)
         }
+
+@router.get("/add-test-candidate")
+async def add_test_candidate():
+    """Add a test candidate to verify database insert works"""
+    try:
+        result = db.supabase.table('candidates').insert({
+            'full_name': 'Jane Test Candidate',
+            'party': 'Democratic',
+            'jurisdiction_type': 'federal',
+            'jurisdiction_name': 'United States',
+            'state': 'CA',
+            'office': 'House',
+            'election_cycle': 2026,
+            'incumbent': False,
+            'source_url': 'https://test.example.com'
+        }).execute()
+        
+        return {
+            "status": "success",
+            "candidate_added": result.data[0] if result.data else "No data returned"
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Failed to add test candidate: {str(e)}"
+        }
