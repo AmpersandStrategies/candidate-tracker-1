@@ -118,39 +118,34 @@ async def create_signal(url: str, source: str = "manual"):
     except Exception as e:
         return {"error": f"Database error: {str(e)}"}
 
-@router.post("/test/fec-sample")
+@router.get("/test/fec-sample")
 async def test_fec_sample():
     """Test endpoint to pull 10 FEC candidates"""
     try:
         from app.integrations.fec_client import FECClient
         
+        # Check if FEC API key is configured
+        fec_api_key = getattr(settings, 'fec_api_key', None)
+        if not fec_api_key:
+            return {"error": "FEC_API_KEY not configured", "status": "failed"}
+        
         # Initialize FEC client
         fec_client = FECClient()
         
-        # Get 10 candidates from 2026 cycle
+        # Get candidates from 2026 cycle
         candidates = await fec_client.get_candidates(2026, "DEM")
-        sample_candidates = candidates[:10]
-        
-        results = []
-        for candidate_data in sample_candidates:
-            candidate_id = await fec_client.store_candidate(candidate_data, 2026)
-            if candidate_id:
-                results.append({
-                    "candidate_id": candidate_id,
-                    "name": candidate_data.get("name", ""),
-                    "party": candidate_data.get("party", ""),
-                    "state": candidate_data.get("state", "")
-                })
         
         return {
-            "status": "success",
-            "candidates_processed": len(results),
-            "results": results
+            "status": "debug",
+            "fec_api_key_configured": bool(fec_api_key),
+            "candidates_retrieved": len(candidates),
+            "first_candidate": candidates[0] if candidates else None,
+            "raw_candidates": candidates[:3]  # Show first 3 for debugging
         }
         
     except Exception as e:
         return {
             "error": f"FEC test failed: {str(e)}",
+            "error_type": str(type(e).__name__),
             "status": "failed"
         }
-        
