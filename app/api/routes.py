@@ -1,6 +1,11 @@
 """FastAPI routes"""
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
+from typing import Optional
 from datetime import datetime
+from app.db.client import db
+import os
+import httpx
+import json
 
 router = APIRouter()
 
@@ -20,12 +25,6 @@ async def health_check():
 async def test():
     """Simple test endpoint"""
     return {"message": "API is working"}
-from fastapi import APIRouter, Query
-from typing import Optional
-from datetime import datetime
-from app.db.client import db
-import os
-import httpx
 
 @router.get("/candidates")
 async def get_candidates(
@@ -65,6 +64,9 @@ async def collect_fec_data():
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
         
+        if not fec_api_key:
+            return {"error": "FEC_API_KEY not configured"}
+        
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://api.open.fec.gov/v1/candidates",
@@ -77,79 +79,7 @@ async def collect_fec_data():
                 }
             )
             response.raise_for_status()
-
-            @router.get("/sync-to-airtable")
-async def sync_to_airtable():
-    """Sync candidates to Airtable"""
-    try:
-        import requests
-        
-        airtable_token = os.environ.get('AIRTABLE_TOKEN')
-        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
-        
-        if not airtable_token or not airtable_base_id:
-            return {"error": "Airtable credentials not configured"}
-        
-        candidates_result = db.supabase.table('candidates').select('*').execute()
-        candidates = candidates_result.data
-        
-        if not candidates:
-            return {"error": "No candidates found"}
-        
-        # Map party codes to Airtable values
-        def map_party(party_code):
-            if party_code in ["DEM", "Democratic"]:
-                return "Democratic"
-            elif party_code in ["REP", "Republican"]:
-                return "Republican"
-            elif party_code in ["IND", "Independent"]:
-                return "Independent"
-            else:
-                return "Other"
-        
-        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
-        headers = {
-            "Authorization": f"Bearer {airtable_token}",
-            "Content-Type": "application/json"
-        }
-        
-        synced_count = 0
-        
-        # Process in batches of 10
-        for i in range(0, len(candidates), 10):
-            batch = candidates[i:i+10]
-            records = []
             
-            for candidate in batch:
-                record = {
-                    "fields": {
-                        "Full Name": candidate.get('full_name', ''),
-                        "Party": map_party(candidate.get('party', '')),
-                        "Jurisdiction": candidate.get('jurisdiction_name', ''),
-                        "Office Sought": candidate.get('office', ''),
-                        "Incumbent?": candidate.get('incumbent', False),
-                        "Status": "Active"
-                    }
-                }
-                records.append(record)
-            
-            response = requests.post(airtable_url, headers=headers, json={"records": records})
-            
-            if response.status_code == 200:
-                synced_count += len(records)
-            else:
-                return {
-                    "error": f"Airtable sync failed: {response.status_code}",
-                    "response": response.text
-                }
-        
-        return {
-            "status": "success",
-            "candidates_synced": synced_count,
-            "total_candidates": len(candidates)
-        }
-    except Exception as e:
-        return {"error": f"Sync failed: {str(e)}"}
             data = response.json()
             candidates = data.get("results", [])
             
@@ -171,7 +101,8 @@ async def sync_to_airtable():
                     
                     if result.data:
                         stored_count += 1
-                except:
+                except Exception as insert_error:
+                    print(f"Failed to insert candidate: {insert_error}")
                     continue
             
             return {
@@ -181,6 +112,102 @@ async def sync_to_airtable():
             }
     except Exception as e:
         return {"error": f"Collection failed: {str(e)}"}
+
+@router.get("/sync-to-airtable")
+async def sync_to_airtable():
+    """Sync candidates to Airtable with detailed debugging"""
+    try:
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Airtable credentials not configured"}
+        
+        # Get candidates from database
+        candidates_result = db.supabase.table('candidates').select('*').execute()
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {"error": "No candidates found in database"}
+        
+        print(f"Found {len(candidates)} candidates to sync")
+        
+        # Map party codes to Airtable values
+        def map_party(party_code):
+            if not party_code:
+                return "Other"
+            party_code = str(party_code).upper()
+            if party_code in ["DEM", "DEMOCRATIC"]:
+                return "Democratic"
+            elif party_code in ["REP", "REPUBLICAN"]:
+                return "Republican"
+            elif party_code in ["IND", "INDEPENDENT"]:
+                return "Independent"
+            else:
+                return "Other"
+        
+        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
+        headers = {
+            "Authorization": f"Bearer {airtable_token}",
+            "Content-Type": "application/json"
+        }
+        
+        synced_count = 0
+        errors = []
+        
+        # Process in batches of 10 (Airtable limit)
+        async with httpx.AsyncClient() as client:
+            for i in range(0, len(candidates), 10):
+                batch = candidates[i:i+10]
+                records = []
+                
+                for candidate in batch:
+                    # Debug: Print candidate data
+                    print(f"Processing candidate: {candidate.get('full_name', 'Unknown')}")
+                    
+                    record = {
+                        "fields": {
+                            "Full Name": str(candidate.get('full_name', '')),
+                            "Party": map_party(candidate.get('party', '')),
+                            "Jurisdiction": str(candidate.get('jurisdiction_name', '')),
+                            "Office Sought": str(candidate.get('office', '')),
+                            "Incumbent?": bool(candidate.get('incumbent', False)),
+                            "Status": "Active"
+                        }
+                    }
+                    records.append(record)
+                
+                # Debug: Print what we're sending
+                print(f"Sending batch {i//10 + 1} with {len(records)} records")
+                payload = {"records": records}
+                print(f"Payload preview: {json.dumps(payload, indent=2)[:500]}...")
+                
+                try:
+                    response = await client.post(airtable_url, headers=headers, json=payload)
+                    
+                    if response.status_code == 200:
+                        synced_count += len(records)
+                        print(f"Successfully synced batch {i//10 + 1}")
+                    else:
+                        error_msg = f"Batch {i//10 + 1} failed: {response.status_code} - {response.text}"
+                        print(error_msg)
+                        errors.append(error_msg)
+                        
+                except Exception as batch_error:
+                    error_msg = f"Batch {i//10 + 1} error: {str(batch_error)}"
+                    print(error_msg)
+                    errors.append(error_msg)
+        
+        return {
+            "status": "completed",
+            "candidates_synced": synced_count,
+            "total_candidates": len(candidates),
+            "errors": errors,
+            "success_rate": f"{(synced_count/len(candidates)*100):.1f}%" if candidates else "0%"
+        }
+        
+    except Exception as e:
+        return {"error": f"Sync failed: {str(e)}"}
 
 @router.get("/check-party-values")
 async def check_party_values():
@@ -196,3 +223,47 @@ async def check_party_values():
         }
     except Exception as e:
         return {"error": f"Failed to check parties: {str(e)}"}
+
+@router.get("/debug-airtable")
+async def debug_airtable():
+    """Debug endpoint to test Airtable connection and data format"""
+    try:
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Airtable credentials not configured"}
+        
+        # Test with just one simple record
+        test_record = {
+            "records": [{
+                "fields": {
+                    "Full Name": "Test Candidate",
+                    "Party": "Democratic",
+                    "Jurisdiction": "Test State",
+                    "Office Sought": "House",
+                    "Incumbent?": False,
+                    "Status": "Active"
+                }
+            }]
+        }
+        
+        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
+        headers = {
+            "Authorization": f"Bearer {airtable_token}",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(airtable_url, headers=headers, json=test_record)
+            
+            return {
+                "status_code": response.status_code,
+                "response_text": response.text,
+                "test_record": test_record,
+                "headers_sent": headers,
+                "url": airtable_url
+            }
+            
+    except Exception as e:
+        return {"error": f"Debug failed: {str(e)}"}
