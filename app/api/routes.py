@@ -95,19 +95,20 @@ async def collect_fec_data():
                         continue
                     
                     result = db.supabase.table('candidates').insert({
-                        'source_candidate_ID': source_id,
-                        'source_system': 'FEC',
-                        'full_name': candidate.get('name', ''),
-                        'party': candidate.get('party', ''),
-                        'jurisdiction_type': 'federal',
-                        'jurisdiction_name': 'United States',
-                        'state': candidate.get('state', ''),
-                        'office': candidate.get('office_full', 'House'),
-                        'district': candidate.get('district', ''),
-                        'election_cycle': 2026,
-                        'incumbent': candidate.get('incumbent_challenge', '') == 'I',
-                        'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
-                    }).execute()
+    'source_candidate_ID': source_id,
+    'source_system': 'FEC',
+    'full_name': candidate.get('name', ''),
+    'party': candidate.get('party', ''),
+    'jurisdiction_type': 'federal',
+    'jurisdiction_name': 'United States',
+    'state': candidate.get('state', ''),
+    'office': candidate.get('office_full', office),
+    'district': candidate.get('district', ''),
+    'election_cycle': cycle,
+    'incumbent': candidate.get('incumbent_challenge_full', '') == 'Incumbent',
+    'status': candidate.get('candidate_status', 'Active'),
+    'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
+}).execute()
                     
                     if result.data:
                         stored_count += 1
@@ -186,24 +187,21 @@ async def collect_democratic_candidates():
                                             continue
                                         
                                         result = db.supabase.table('candidates').insert({
-                                            'source_candidate_ID': source_id,
-                                            'source_system': 'FEC',
-                                            'full_name': candidate.get('name', ''),
-                                            'party': candidate.get('party', ''),
-                                            'party_full': candidate.get('party_full', ''),
-                                            'jurisdiction_type': 'federal',
-                                            'jurisdiction_name': 'United States',
-                                            'state': candidate.get('state', ''),
-                                            'office': candidate.get('office_full', office),
-                                            'district': candidate.get('district', ''),
-                                            'election_cycle': cycle,
-                                            'incumbent': candidate.get('incumbent_challenge_full', '') == 'Incumbent',
-                                            'status': candidate.get('candidate_status', 'Active'),
-                                            'first_file_date': candidate.get('first_file_date', ''),
-                                            'last_file_date': candidate.get('last_file_date', ''),
-                                            'load_date': candidate.get('load_date', ''),
-                                            'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
-                                        }).execute()
+    'source_candidate_ID': source_id,
+    'source_system': 'FEC',
+    'full_name': candidate.get('name', ''),
+    'party': candidate.get('party', ''),
+    'jurisdiction_type': 'federal',
+    'jurisdiction_name': 'United States',
+    'state': candidate.get('state', ''),
+    'office': candidate.get('office_full', office),
+    'district': candidate.get('district', ''),
+    'election_cycle': cycle,
+    'incumbent': candidate.get('incumbent_challenge_full', '') == 'Incumbent',
+    'status': candidate.get('candidate_status', 'Active'),
+    'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
+}).execute()
+                                        
                                         
                                         if result.data:
                                             stored_in_category += 1
