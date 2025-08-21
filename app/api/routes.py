@@ -77,6 +77,79 @@ async def collect_fec_data():
                 }
             )
             response.raise_for_status()
+
+            @router.get("/sync-to-airtable")
+async def sync_to_airtable():
+    """Sync candidates to Airtable"""
+    try:
+        import requests
+        
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Airtable credentials not configured"}
+        
+        candidates_result = db.supabase.table('candidates').select('*').execute()
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {"error": "No candidates found"}
+        
+        # Map party codes to Airtable values
+        def map_party(party_code):
+            if party_code in ["DEM", "Democratic"]:
+                return "Democratic"
+            elif party_code in ["REP", "Republican"]:
+                return "Republican"
+            elif party_code in ["IND", "Independent"]:
+                return "Independent"
+            else:
+                return "Other"
+        
+        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
+        headers = {
+            "Authorization": f"Bearer {airtable_token}",
+            "Content-Type": "application/json"
+        }
+        
+        synced_count = 0
+        
+        # Process in batches of 10
+        for i in range(0, len(candidates), 10):
+            batch = candidates[i:i+10]
+            records = []
+            
+            for candidate in batch:
+                record = {
+                    "fields": {
+                        "Full Name": candidate.get('full_name', ''),
+                        "Party": map_party(candidate.get('party', '')),
+                        "Jurisdiction": candidate.get('jurisdiction_name', ''),
+                        "Office Sought": candidate.get('office', ''),
+                        "Incumbent?": candidate.get('incumbent', False),
+                        "Status": "Active"
+                    }
+                }
+                records.append(record)
+            
+            response = requests.post(airtable_url, headers=headers, json={"records": records})
+            
+            if response.status_code == 200:
+                synced_count += len(records)
+            else:
+                return {
+                    "error": f"Airtable sync failed: {response.status_code}",
+                    "response": response.text
+                }
+        
+        return {
+            "status": "success",
+            "candidates_synced": synced_count,
+            "total_candidates": len(candidates)
+        }
+    except Exception as e:
+        return {"error": f"Sync failed: {str(e)}"}
             data = response.json()
             candidates = data.get("results", [])
             
