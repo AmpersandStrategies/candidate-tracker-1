@@ -248,18 +248,28 @@ async def sync_to_airtable():
             batch = candidates[i:i+10]
             records = []
             
-            for candidate in batch:
-                record = {
-                    "fields": {
-                        "Full Name": candidate.get('full_name', ''),
-                        "Party": candidate.get('party', ''),
-                        "Jurisdiction": candidate.get('jurisdiction_name', ''),
-                        "Office Sought": candidate.get('office', ''),
-                        "Incumbent?": candidate.get('incumbent', False),
-                        "Status": "Active"
-                    }
-                }
-                records.append(record)
+           # In the sync function, replace the record creation with this:
+def map_party(fec_party):
+    """Map FEC party codes to Airtable values"""
+    mapping = {
+        "DEM": "Democratic",
+        "REP": "Republican", 
+        "IND": "Independent"
+    }
+    return mapping.get(fec_party, "Other")
+
+for candidate in batch:
+    record = {
+        "fields": {
+            "Full Name": candidate.get('full_name', ''),
+            "Party": map_party(candidate.get('party', '')),
+            "Jurisdiction": candidate.get('jurisdiction_name', ''),
+            "Office Sought": candidate.get('office', ''),
+            "Incumbent?": candidate.get('incumbent', False),
+            "Status": "Active"
+        }
+    }
+    records.append(record)
             
             # Send batch to Airtable
             response = requests.post(airtable_url, headers=headers, json={"records": records})
