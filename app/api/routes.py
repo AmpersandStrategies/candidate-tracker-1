@@ -89,7 +89,7 @@ async def collect_fec_data():
                 try:
                     # Check if candidate exists using new schema
                     source_id = candidate.get('candidate_id', '')
-                    existing = db.supabase.table('candidates').select('id').eq('source_system', 'FEC').eq('source_candidate_id', source_id).execute()
+                    existing = db.supabase.table('candidates').select('candidate_id').eq('source_system', 'FEC').eq('source_candidate_id', source_id).execute()
                     
                     if existing.data:
                         continue
@@ -179,7 +179,7 @@ async def collect_democratic_candidates():
                                         source_id = candidate.get('candidate_id', '')
                                         
                                         # Check for existing candidate using flexible schema
-                                        existing = db.supabase.table('candidates').select('id').eq('source_system', 'FEC').eq('source_candidate_id', source_id).execute()
+                                        existing = db.supabase.table('candidates').select('candidate_id').eq('source_system', 'FEC').eq('source_candidate_id', source_id).execute()
                                         
                                         if existing.data:
                                             print(f"Candidate {candidate.get('name', '')} already exists, skipping...")
