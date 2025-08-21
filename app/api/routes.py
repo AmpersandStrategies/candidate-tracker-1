@@ -87,7 +87,6 @@ async def collect_fec_data():
             stored_count = 0
             for candidate in candidates:
                 try:
-                    # Check if candidate exists using corrected schema
                     source_id = candidate.get('candidate_id', '')
                     existing = db.supabase.table('candidates').select('candidate_id').eq('source_system', 'FEC').eq('source_candidate_ID', source_id).execute()
                     
@@ -95,25 +94,24 @@ async def collect_fec_data():
                         continue
                     
                     result = db.supabase.table('candidates').insert({
-    'source_candidate_ID': source_id,
-    'source_system': 'FEC',
-    'full_name': candidate.get('name', ''),
-    'party': candidate.get('party', ''),
-    'jurisdiction_type': 'federal',
-    'jurisdiction_name': 'United States',
-    'state': candidate.get('state', ''),
-    'office': candidate.get('office_full', office),
-    'district': candidate.get('district', ''),
-    'election_cycle': cycle,
-    'incumbent': candidate.get('incumbent_challenge_full', '') == 'Incumbent',
-    'status': candidate.get('candidate_status', 'Active'),
-    'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
-}).execute()
+                        'source_candidate_ID': source_id,
+                        'source_system': 'FEC',
+                        'full_name': candidate.get('name', ''),
+                        'party': candidate.get('party', ''),
+                        'jurisdiction_type': 'federal',
+                        'jurisdiction_name': 'United States',
+                        'state': candidate.get('state', ''),
+                        'office': candidate.get('office_full', 'House'),
+                        'district': candidate.get('district', ''),
+                        'election_cycle': 2026,
+                        'incumbent': candidate.get('incumbent_challenge', '') == 'I',
+                        'status': candidate.get('candidate_status', 'Active'),
+                        'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
+                    }).execute()
                     
                     if result.data:
                         stored_count += 1
                 except Exception as insert_error:
-                    print(f"Failed to insert candidate: {insert_error}")
                     continue
             
             return {
@@ -133,7 +131,6 @@ async def collect_democratic_candidates():
         if not fec_api_key:
             return {"error": "FEC_API_KEY not configured"}
         
-        # Focused on Democrats + Independents only
         parties_to_collect = ["DEM", "IND"]
         offices = ["H", "S", "P"]
         cycles = [2026]
@@ -146,7 +143,6 @@ async def collect_democratic_candidates():
             for cycle in cycles:
                 for office in offices:
                     for party in parties_to_collect:
-                        print(f"Collecting {cycle} {office} {party} candidates...")
                         
                         page = 1
                         candidates_in_category = 0
@@ -179,36 +175,31 @@ async def collect_democratic_candidates():
                                     try:
                                         source_id = candidate.get('candidate_id', '')
                                         
-                                        # Check for existing candidate using corrected schema
                                         existing = db.supabase.table('candidates').select('candidate_id').eq('source_system', 'FEC').eq('source_candidate_ID', source_id).execute()
                                         
                                         if existing.data:
-                                            print(f"Candidate {candidate.get('name', '')} already exists, skipping...")
                                             continue
                                         
                                         result = db.supabase.table('candidates').insert({
-    'source_candidate_ID': source_id,
-    'source_system': 'FEC',
-    'full_name': candidate.get('name', ''),
-    'party': candidate.get('party', ''),
-    'jurisdiction_type': 'federal',
-    'jurisdiction_name': 'United States',
-    'state': candidate.get('state', ''),
-    'office': candidate.get('office_full', office),
-    'district': candidate.get('district', ''),
-    'election_cycle': cycle,
-    'incumbent': candidate.get('incumbent_challenge_full', '') == 'Incumbent',
-    'status': candidate.get('candidate_status', 'Active'),
-    'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
-}).execute()
-                                        
+                                            'source_candidate_ID': source_id,
+                                            'source_system': 'FEC',
+                                            'full_name': candidate.get('name', ''),
+                                            'party': candidate.get('party', ''),
+                                            'jurisdiction_type': 'federal',
+                                            'jurisdiction_name': 'United States',
+                                            'state': candidate.get('state', ''),
+                                            'office': candidate.get('office_full', office),
+                                            'district': candidate.get('district', ''),
+                                            'election_cycle': cycle,
+                                            'incumbent': candidate.get('incumbent_challenge_full', '') == 'Incumbent',
+                                            'status': candidate.get('candidate_status', 'Active'),
+                                            'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
+                                        }).execute()
                                         
                                         if result.data:
                                             stored_in_category += 1
-                                            print(f"Successfully stored: {candidate.get('name', '')}")
                                             
                                     except Exception as insert_error:
-                                        print(f"Failed to insert candidate {candidate.get('name', '')}: {insert_error}")
                                         continue
                                 
                                 pagination = data.get("pagination", {})
@@ -219,7 +210,6 @@ async def collect_democratic_candidates():
                                 await asyncio.sleep(0.1)
                                 
                             except Exception as page_error:
-                                print(f"Error fetching page {page} for {cycle}-{office}-{party}: {page_error}")
                                 break
                         
                         category_summary = {
@@ -233,8 +223,6 @@ async def collect_democratic_candidates():
                         
                         total_candidates_found += candidates_in_category
                         total_candidates_stored += stored_in_category
-                        
-                        print(f"Completed {cycle} {office} {party}: {candidates_in_category} found, {stored_in_category} stored")
         
         return {
             "status": "success",
@@ -250,7 +238,7 @@ async def collect_democratic_candidates():
 
 @router.get("/sync-to-airtable")
 async def sync_to_airtable():
-    """Sync candidates to Airtable with detailed debugging"""
+    """Sync candidates to Airtable with minimal logging"""
     try:
         airtable_token = os.environ.get('AIRTABLE_TOKEN')
         airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
@@ -258,16 +246,12 @@ async def sync_to_airtable():
         if not airtable_token or not airtable_base_id:
             return {"error": "Airtable credentials not configured"}
         
-        # Get candidates from database
         candidates_result = db.supabase.table('candidates').select('*').execute()
         candidates = candidates_result.data
         
         if not candidates:
             return {"error": "No candidates found in database"}
         
-        print(f"Found {len(candidates)} candidates to sync")
-        
-        # Map party codes to Airtable values
         def map_party(party_code):
             if not party_code:
                 return "Other"
@@ -290,16 +274,12 @@ async def sync_to_airtable():
         synced_count = 0
         errors = []
         
-        # Process in batches of 10 (Airtable limit)
         async with httpx.AsyncClient() as client:
             for i in range(0, len(candidates), 10):
                 batch = candidates[i:i+10]
                 records = []
                 
                 for candidate in batch:
-                    # Debug: Print candidate data
-                    print(f"Processing candidate: {candidate.get('full_name', 'Unknown')}")
-                    
                     record = {
                         "fields": {
                             "Full Name": str(candidate.get('full_name', '')),
@@ -312,28 +292,24 @@ async def sync_to_airtable():
                     }
                     records.append(record)
                 
-                # Debug: Print what we're sending
-# Minimal logging - only every 10th batch
-if (i//10 + 1) % 10 == 0:
-    print(f"Synced batch {i//10 + 1} of ~{len(candidates)//10}")
-
-payload = {"records": records}
-
-try:
-    response = await client.post(airtable_url, headers=headers, json=payload)
-    
-    if response.status_code == 200:
-        synced_count += len(records)
-        print(f"Successfully synced batch {i//10 + 1}")
-    else:
-        error_msg = f"Batch {i//10 + 1} failed: {response.status_code} - {response.text}"
-        print(error_msg)
-        errors.append(error_msg)
-        
-except Exception as batch_error:
-    error_msg = f"Batch {i//10 + 1} error: {str(batch_error)}"
-    print(error_msg)
-    errors.append(error_msg)
+                # Minimal logging - only every 25th batch to avoid rate limits
+                if (i // 10 + 1) % 25 == 0:
+                    print(f"Synced batch {i // 10 + 1} of {len(candidates) // 10}")
+                
+                payload = {"records": records}
+                
+                try:
+                    response = await client.post(airtable_url, headers=headers, json=payload)
+                    
+                    if response.status_code == 200:
+                        synced_count += len(records)
+                    else:
+                        error_msg = f"Batch {i//10 + 1} failed: {response.status_code}"
+                        errors.append(error_msg)
+                        
+                except Exception as batch_error:
+                    error_msg = f"Batch {i//10 + 1} error: {str(batch_error)}"
+                    errors.append(error_msg)
         
         return {
             "status": "completed",
@@ -371,7 +347,6 @@ async def debug_airtable():
         if not airtable_token or not airtable_base_id:
             return {"error": "Airtable credentials not configured"}
         
-        # Test with just one simple record
         test_record = {
             "records": [{
                 "fields": {
@@ -409,20 +384,16 @@ async def debug_airtable():
 async def democratic_collection_status():
     """Get status of Democratic candidate collection"""
     try:
-        # Democratic candidates
         dem_result = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('jurisdiction_type', 'federal').execute()
         dem_count = dem_result.count or 0
         
-        # Independent candidates  
         ind_result = db.supabase.table('candidates').select('*', count='exact').eq('party', 'IND').eq('jurisdiction_type', 'federal').execute()
         ind_count = ind_result.count or 0
         
-        # By office for Democrats
         dem_house = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'House').execute()
         dem_senate = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'Senate').execute()
         dem_president = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'President').execute()
         
-        # Top states for Democrats
         dem_candidates = db.supabase.table('candidates').select('state').eq('party', 'DEM').eq('jurisdiction_type', 'federal').execute()
         dem_states = [c.get('state') for c in dem_candidates.data if c.get('state')]
         
