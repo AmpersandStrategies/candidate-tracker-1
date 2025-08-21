@@ -313,25 +313,27 @@ async def sync_to_airtable():
                     records.append(record)
                 
                 # Debug: Print what we're sending
-               # Minimal logging - only every 10th batch
+# Minimal logging - only every 10th batch
 if (i//10 + 1) % 10 == 0:
     print(f"Synced batch {i//10 + 1} of ~{len(candidates)//10}")
-                
-                try:
-                    response = await client.post(airtable_url, headers=headers, json=payload)
-                    
-                    if response.status_code == 200:
-                        synced_count += len(records)
-                        print(f"Successfully synced batch {i//10 + 1}")
-                    else:
-                        error_msg = f"Batch {i//10 + 1} failed: {response.status_code} - {response.text}"
-                        print(error_msg)
-                        errors.append(error_msg)
-                        
-                except Exception as batch_error:
-                    error_msg = f"Batch {i//10 + 1} error: {str(batch_error)}"
-                    print(error_msg)
-                    errors.append(error_msg)
+
+payload = {"records": records}
+
+try:
+    response = await client.post(airtable_url, headers=headers, json=payload)
+    
+    if response.status_code == 200:
+        synced_count += len(records)
+        print(f"Successfully synced batch {i//10 + 1}")
+    else:
+        error_msg = f"Batch {i//10 + 1} failed: {response.status_code} - {response.text}"
+        print(error_msg)
+        errors.append(error_msg)
+        
+except Exception as batch_error:
+    error_msg = f"Batch {i//10 + 1} error: {str(batch_error)}"
+    print(error_msg)
+    errors.append(error_msg)
         
         return {
             "status": "completed",
