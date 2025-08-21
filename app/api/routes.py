@@ -313,9 +313,9 @@ async def sync_to_airtable():
                     records.append(record)
                 
                 # Debug: Print what we're sending
-                print(f"Sending batch {i//10 + 1} with {len(records)} records")
-                payload = {"records": records}
-                print(f"Payload preview: {json.dumps(payload, indent=2)[:500]}...")
+               # Minimal logging - only every 10th batch
+if (i//10 + 1) % 10 == 0:
+    print(f"Synced batch {i//10 + 1} of ~{len(candidates)//10}")
                 
                 try:
                     response = await client.post(airtable_url, headers=headers, json=payload)
