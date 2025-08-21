@@ -58,3 +58,53 @@ async def get_candidates(
         }
     except Exception as e:
         return {"error": f"Database error: {str(e)}"}
+
+@router.get("/collect-fec-data")
+async def collect_fec_data():
+    """Collect FEC candidates"""
+    try:
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.open.fec.gov/v1/candidates",
+                params={
+                    "api_key": fec_api_key,
+                    "cycle": 2026,
+                    "party": "DEM",
+                    "office": "H",
+                    "per_page": 20
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            candidates = data.get("results", [])
+            
+            stored_count = 0
+            for candidate in candidates:
+                try:
+                    result = db.supabase.table('candidates').insert({
+                        'full_name': candidate.get('name', ''),
+                        'party': candidate.get('party', ''),
+                        'jurisdiction_type': 'federal',
+                        'jurisdiction_name': 'United States',
+                        'state': candidate.get('state', ''),
+                        'office': candidate.get('office_full', 'House'),
+                        'district': candidate.get('district', ''),
+                        'election_cycle': 2026,
+                        'incumbent': candidate.get('incumbent_challenge', '') == 'I',
+                        'source_url': f"https://www.fec.gov/data/candidate/{candidate.get('candidate_id', '')}/"
+                    }).execute()
+                    
+                    if result.data:
+                        stored_count += 1
+                except:
+                    continue
+            
+            return {
+                "status": "success",
+                "candidates_found": len(candidates),
+                "candidates_stored": stored_count
+            }
+    except Exception as e:
+        return {"error": f"Collection failed: {str(e)}"}
