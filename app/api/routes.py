@@ -6,6 +6,7 @@ from app.db.client import db
 import os
 import httpx
 import json
+import asyncio  
 
 router = APIRouter()
 
@@ -267,3 +268,131 @@ async def debug_airtable():
             
     except Exception as e:
         return {"error": f"Debug failed: {str(e)}"}
+
+@router.get("/collect-all-fec-data")
+async def collect_all_fec_data():
+    """Collect ALL FEC candidates for 2026 cycle"""
+    try:
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        
+        if not fec_api_key:
+            return {"error": "FEC_API_KEY not configured"}
+        
+        # Define what we want to collect
+        parties = ["DEM", "REP", "IND", "LIB", "GRN"]  # Major parties + independents
+        offices = ["H", "S", "P"]  # House, Senate, President
+        cycles = [2026]  # Can expand to include 2024, 2028 later
+        
+        total_candidates_found = 0
+        total_candidates_stored = 0
+        collection_summary = []
+        
+        async with httpx.AsyncClient() as client:
+            for cycle in cycles:
+                for office in offices:
+                    for party in parties:
+                        print(f"Collecting {cycle} {office} {party} candidates...")
+                        
+                        # Collect all pages for this combination
+                        page = 1
+                        candidates_in_category = 0
+                        stored_in_category = 0
+                        
+                        while True:
+                            try:
+                                response = await client.get(
+                                    "https://api.open.fec.gov/v1/candidates",
+                                    params={
+                                        "api_key": fec_api_key,
+                                        "cycle": cycle,
+                                        "party": party,
+                                        "office": office,
+                                        "per_page": 100,  # Max per page
+                                        "page": page
+                                    }
+                                )
+                                response.raise_for_status()
+                                
+                                data = response.json()
+                                candidates = data.get("results", [])
+                                
+                                if not candidates:
+                                    break  # No more candidates
+                                
+                                candidates_in_category += len(candidates)
+                                
+                                # Process and store candidates
+                                for candidate in candidates:
+                                    try:
+                                        # Check if candidate already exists to avoid duplicates
+                                        existing = db.supabase.table('candidates').select('candidate_id').eq('candidate_id', candidate.get('candidate_id', '')).execute()
+                                        
+                                        if existing.data:
+                                            print(f"Candidate {candidate.get('name', '')} already exists, skipping...")
+                                            continue
+                                        
+                                        result = db.supabase.table('candidates').insert({
+                                            'candidate_id': candidate.get('candidate_id', ''),
+                                            'full_name': candidate.get('name', ''),
+                                            'party': candidate.get('party', ''),
+                                            'party_full': candidate.get('party_full', ''),
+                                            'jurisdiction_type': 'federal',
+                                            'jurisdiction_name': 'United States',
+                                            'state': candidate.get('state', ''),
+                                            'office': candidate.get('office_full', office),
+                                            'district': candidate.get('district', ''),
+                                            'election_cycle': cycle,
+                                            'incumbent': candidate.get('incumbent_challenge_full', '') == 'Incumbent',
+                                            'status': candidate.get('candidate_status', 'Active'),
+                                            'first_file_date': candidate.get('first_file_date', ''),
+                                            'last_file_date': candidate.get('last_file_date', ''),
+                                            'load_date': candidate.get('load_date', ''),
+                                            'source_url': f"https://www.fec.gov/data/candidate/{candidate.get('candidate_id', '')}/"
+                                        }).execute()
+                                        
+                                        if result.data:
+                                            stored_in_category += 1
+                                            
+                                    except Exception as insert_error:
+                                        print(f"Failed to insert candidate {candidate.get('name', '')}: {insert_error}")
+                                        continue
+                                
+                                # Check if there are more pages
+                                pagination = data.get("pagination", {})
+                                if page >= pagination.get("pages", 1):
+                                    break
+                                    
+                                page += 1
+                                
+                                # Add a small delay to be respectful to the API
+                                await asyncio.sleep(0.1)
+                                
+                            except Exception as page_error:
+                                print(f"Error fetching page {page} for {cycle}-{office}-{party}: {page_error}")
+                                break
+                        
+                        # Record summary for this category
+                        category_summary = {
+                            "cycle": cycle,
+                            "office": office,
+                            "party": party,
+                            "candidates_found": candidates_in_category,
+                            "candidates_stored": stored_in_category
+                        }
+                        collection_summary.append(category_summary)
+                        
+                        total_candidates_found += candidates_in_category
+                        total_candidates_stored += stored_in_category
+                        
+                        print(f"Completed {cycle} {office} {party}: {candidates_in_category} found, {stored_in_category} stored")
+        
+        return {
+            "status": "success",
+            "total_candidates_found": total_candidates_found,
+            "total_candidates_stored": total_candidates_stored,
+            "collection_summary": collection_summary,
+            "message": f"Successfully collected {total_candidates_stored} candidates across all parties and offices"
+        }
+        
+    except Exception as e:
+        return {"error": f"Collection failed: {str(e)}"}
