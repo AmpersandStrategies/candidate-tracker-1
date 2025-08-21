@@ -108,3 +108,18 @@ async def collect_fec_data():
             }
     except Exception as e:
         return {"error": f"Collection failed: {str(e)}"}
+
+@router.get("/check-party-values")
+async def check_party_values():
+    """Check what party values exist in the data"""
+    try:
+        candidates_result = db.supabase.table('candidates').select('party').execute()
+        parties = [c.get('party') for c in candidates_result.data if c.get('party')]
+        unique_parties = list(set(parties))
+        return {
+            "unique_parties": unique_parties, 
+            "count": len(parties),
+            "sample_parties": parties[:10]
+        }
+    except Exception as e:
+        return {"error": f"Failed to check parties: {str(e)}"}
