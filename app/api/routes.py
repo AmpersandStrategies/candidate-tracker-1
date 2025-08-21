@@ -213,3 +213,70 @@ async def add_test_candidate():
         return {
             "error": f"Failed to add test candidate: {str(e)}"
         }
+
+
+@router.get("/sync-to-airtable")
+async def sync_to_airtable():
+    """Sync existing candidates from Supabase to Airtable"""
+    try:
+        import requests
+        
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Airtable credentials not configured"}
+        
+        # Get candidates from Supabase
+        candidates_result = db.supabase.table('candidates').select('*').execute()
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {"error": "No candidates found in database"}
+        
+        # Prepare Airtable records
+        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
+        headers = {
+            "Authorization": f"Bearer {airtable_token}",
+            "Content-Type": "application/json"
+        }
+        
+        synced_count = 0
+        
+        # Sync in batches of 10 (Airtable limit)
+        for i in range(0, len(candidates), 10):
+            batch = candidates[i:i+10]
+            records = []
+            
+            for candidate in batch:
+                record = {
+                    "fields": {
+                        "Full Name": candidate.get('full_name', ''),
+                        "Party": candidate.get('party', ''),
+                        "Jurisdiction": candidate.get('jurisdiction_name', ''),
+                        "Office Sought": candidate.get('office', ''),
+                        "Incumbent?": candidate.get('incumbent', False),
+                        "Status": "Active"
+                    }
+                }
+                records.append(record)
+            
+            # Send batch to Airtable
+            response = requests.post(airtable_url, headers=headers, json={"records": records})
+            
+            if response.status_code == 200:
+                synced_count += len(records)
+            else:
+                return {
+                    "error": f"Airtable sync failed: {response.status_code}",
+                    "response": response.text
+                }
+        
+        return {
+            "status": "success",
+            "candidates_synced": synced_count,
+            "total_candidates": len(candidates)
+        }
+        
+    except Exception as e:
+        return {"error": f"Sync failed: {str(e)}"}
