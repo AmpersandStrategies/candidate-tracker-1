@@ -255,17 +255,17 @@ async def sync_to_airtable():
             return {"error": "No Democratic or Independent candidates found in database"}
         
         def map_party(party_code):
-            if not party_code:
-                return "Other"
-            party_code = str(party_code).upper()
-            if party_code in ["DEM", "DEMOCRATIC"]:
-                return "Democratic"  # This matches your Airtable field
-            elif party_code in ["REP", "REPUBLICAN"]:
-                return "Republican"
-            elif party_code in ["IND", "INDEPENDENT"]:
-                return "Independent"
-            else:
-                return "Other"
+    if not party_code:
+        return "Other"
+    party_code = str(party_code).upper()
+    if party_code in ["DEM", "DEMOCRATIC"]:
+        return "Democratic"  # Changed from "Democrat"
+    elif party_code in ["REP", "REPUBLICAN"]:
+        return "Republican"
+    elif party_code in ["IND", "INDEPENDENT"]:
+        return "Independent"
+    else:
+        return "Other"
         
         airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
         headers = {
