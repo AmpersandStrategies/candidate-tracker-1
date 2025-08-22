@@ -183,24 +183,23 @@ async def sync_to_airtable_complete():
         if not airtable_token or not airtable_base_id:
             return {"error": "Airtable credentials not configured"}
         
-        # Filter for Democrats and Independents, 2026 only
         # Paginated fetching to handle large datasets
-candidates = []
-page_size = 1000
-offset = 0
+        candidates = []
+        page_size = 1000
+        offset = 0
 
-while True:
-    batch_result = db.supabase.table('candidates').select('*').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).range(offset, offset + page_size - 1).execute()
-    
-    if not batch_result.data:
-        break
-        
-    candidates.extend(batch_result.data)
-    
-    if len(batch_result.data) < page_size:
-        break
-        
-    offset += page_size
+        while True:
+            batch_result = db.supabase.table('candidates').select('*').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).range(offset, offset + page_size - 1).execute()
+            
+            if not batch_result.data:
+                break
+                
+            candidates.extend(batch_result.data)
+            
+            if len(batch_result.data) < page_size:
+                break
+                
+            offset += page_size
         
         if not candidates:
             return {"error": "No Democratic or Independent candidates found in database"}
@@ -210,7 +209,7 @@ while True:
                 return "Other"
             party_code = str(party_code).upper()
             if party_code in ["DEM", "DEMOCRATIC"]:
-                return "Democratic"  # FIXED: Must match Airtable field exactly
+                return "Democratic"
             elif party_code in ["REP", "REPUBLICAN"]:
                 return "Republican"
             elif party_code in ["IND", "INDEPENDENT"]:
@@ -263,8 +262,8 @@ while True:
                     # Complete field mapping matching your original schema
                     record = {
                         "fields": {
-                            "Candidate ID": source_id,  # Original field
-                            "Source Candidate ID": source_id,  # New field for tracking
+                            "Candidate ID": source_id,
+                            "Source Candidate ID": source_id,
                             "Full Name": str(candidate.get('full_name', '')),
                             "Preferred Name": str(candidate.get('preferred_name', '') or ''),
                             "Party": map_party(candidate.get('party', '')),
@@ -274,8 +273,8 @@ while True:
                             "Current Position": str(candidate.get('current_position', '') or ''),
                             "Bio Summary": str(candidate.get('bio_summary', '') or ''),
                             "Media Mentions": str(candidate.get('media_mentions', '') or ''),
-                            "Confidence Flag": "Medium",  # Default value
-                            "Status": "Active"  # Default status
+                            "Confidence Flag": "Medium",
+                            "Status": "Active"
                         }
                     }
                     candidate_records.append(record)
@@ -323,12 +322,12 @@ while True:
                         filing_record = {
                             "fields": {
                                 "Filing ID": source_id,
-                                "Candidate": [candidate_records_map[source_id]],  # Linked record
+                                "Candidate": [candidate_records_map[source_id]],
                                 "Jurisdiction": str(candidate.get('jurisdiction_name', '')),
                                 "Office": str(candidate.get('office', '')),
                                 "Committee Name": f"{candidate.get('full_name', '')} for {candidate.get('office', '')}",
                                 "Committee ID": source_id,
-                                "COH $": 0,  # Placeholder for future financial data
+                                "COH $": 0,
                                 "Total Raised": 0,
                                 "Total Spent": 0,
                                 "Funding Source Link": str(candidate.get('source_url', '') or '')
@@ -340,7 +339,6 @@ while True:
                         if filing_date:
                             try:
                                 if isinstance(filing_date, str):
-                                    # Parse date and convert to YYYY-MM-DD format
                                     for fmt in ['%Y-%m-%d', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f']:
                                         try:
                                             parsed_date = datetime.strptime(filing_date[:len(fmt.replace('%f', ''))], fmt)
