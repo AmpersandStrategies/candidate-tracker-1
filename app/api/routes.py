@@ -289,7 +289,6 @@ async def sync_to_airtable_complete():
                             "Full Name": str(candidate.get('full_name', '')),
                             "Preferred Name": str(candidate.get('preferred_name', '') or ''),
                             "Party": map_party(candidate.get('party', '')),
-                            "Jurisdiction": str(candidate.get('jurisdiction_name', '')),
                             "Office Sought": str(candidate.get('office', '')),
                             "Incumbent?": bool(candidate.get('incumbent', False)),
                             "Current Position": str(candidate.get('current_position', '') or ''),
