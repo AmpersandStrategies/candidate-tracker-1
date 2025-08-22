@@ -1,3 +1,9 @@
+
+
+
+
+
+
 """FastAPI routes"""
 from fastapi import APIRouter, Query
 from typing import Optional
@@ -352,7 +358,6 @@ async def sync_to_airtable_complete():
                             "fields": {
                                 "Filing ID": source_id,
                                 "Candidate": [candidate_records_map[source_id]],
-                                "Jurisdiction": str(candidate.get('jurisdiction_name', '')),
                                 "Office": str(candidate.get('office', '')),
                                 "Committee Name": f"{candidate.get('full_name', '')} for {candidate.get('office', '')}",
                                 "Committee ID": source_id,
