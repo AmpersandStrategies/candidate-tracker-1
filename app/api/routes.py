@@ -359,7 +359,6 @@ async def sync_to_airtable_complete():
                                 "Filing ID": source_id,
                                 "Candidate": [candidate_records_map[source_id]],
                                 "Committee Name": f"{candidate.get('full_name', '')} for {candidate.get('office', '')}",
-                                "Committee ID": source_id,
                                 "COH $": 0,
                                 "Total Raised": 0,
                                 "Total Spent": 0,
