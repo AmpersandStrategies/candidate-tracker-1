@@ -184,8 +184,23 @@ async def sync_to_airtable_complete():
             return {"error": "Airtable credentials not configured"}
         
         # Filter for Democrats and Independents, 2026 only
-        candidates_result = db.supabase.table('candidates').select('*').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).execute()
-        candidates = candidates_result.data
+        # Paginated fetching to handle large datasets
+candidates = []
+page_size = 1000
+offset = 0
+
+while True:
+    batch_result = db.supabase.table('candidates').select('*').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).range(offset, offset + page_size - 1).execute()
+    
+    if not batch_result.data:
+        break
+        
+    candidates.extend(batch_result.data)
+    
+    if len(batch_result.data) < page_size:
+        break
+        
+    offset += page_size
         
         if not candidates:
             return {"error": "No Democratic or Independent candidates found in database"}
