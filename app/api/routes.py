@@ -59,81 +59,18 @@ async def get_candidates(
     except Exception as e:
         return {"error": f"Database error: {str(e)}"}
 
-@router.get("/collect-fec-data")
-async def collect_fec_data():
-    """Collect FEC candidates (original limited version)"""
-    try:
-        fec_api_key = os.environ.get('FEC_API_KEY')
-        
-        if not fec_api_key:
-            return {"error": "FEC_API_KEY not configured"}
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://api.open.fec.gov/v1/candidates",
-                params={
-                    "api_key": fec_api_key,
-                    "cycle": 2026,
-                    "party": "DEM",
-                    "office": "H",
-                    "per_page": 20
-                }
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            candidates = data.get("results", [])
-            
-            stored_count = 0
-            for candidate in candidates:
-                try:
-                    source_id = candidate.get('candidate_id', '')
-                    existing = db.supabase.table('candidates').select('candidate_id').eq('source_system', 'FEC').eq('source_candidate_ID', source_id).execute()
-                    
-                    if existing.data:
-                        continue
-                    
-                    result = db.supabase.table('candidates').insert({
-                        'source_candidate_ID': source_id,
-                        'source_system': 'FEC',
-                        'full_name': candidate.get('name', ''),
-                        'party': candidate.get('party', ''),
-                        'jurisdiction_type': 'federal',
-                        'jurisdiction_name': 'United States',
-                        'state': candidate.get('state', ''),
-                        'office': candidate.get('office_full', 'House'),
-                        'district': candidate.get('district', ''),
-                        'election_cycle': 2026,
-                        'incumbent': candidate.get('incumbent_challenge', '') == 'I',
-                        'status': candidate.get('candidate_status', 'Active'),
-                        'source_url': f"https://www.fec.gov/data/candidate/{source_id}/"
-                    }).execute()
-                    
-                    if result.data:
-                        stored_count += 1
-                except Exception as insert_error:
-                    continue
-            
-            return {
-                "status": "success",
-                "candidates_found": len(candidates),
-                "candidates_stored": stored_count
-            }
-    except Exception as e:
-        return {"error": f"Collection failed: {str(e)}"}
-
 @router.get("/collect-democratic-candidates")
 async def collect_democratic_candidates():
-    """Collect ALL Democratic candidates + Independents for all cycles"""
+    """Collect ALL Democratic candidates + Independents for 2026 cycle"""
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
         
         if not fec_api_key:
             return {"error": "FEC_API_KEY not configured"}
         
-        parties_to_collect = ["DEM", "IND"]  # Only Democrats and Independents
+        parties_to_collect = ["DEM", "IND"]
         offices = ["H", "S", "P"]
-        cycles = [2025, 2026, 2027, 2028]  # Removed 2026-only restriction
+        cycles = [2026]
         
         total_candidates_found = 0
         total_candidates_stored = 0
@@ -226,8 +163,7 @@ async def collect_democratic_candidates():
         
         return {
             "status": "success",
-            "focus": "Democratic candidates + Independents only",
-            "cycles_collected": cycles,
+            "focus": "Democratic candidates + Independents",
             "total_candidates_found": total_candidates_found,
             "total_candidates_stored": total_candidates_stored,
             "collection_summary": collection_summary,
@@ -236,199 +172,6 @@ async def collect_democratic_candidates():
         
     except Exception as e:
         return {"error": f"Collection failed: {str(e)}"}
-
-@router.get("/sync-to-airtable")
-async def sync_to_airtable():
-    """Sync candidates to Airtable with minimal logging - Democrats and Independents only"""
-    try:
-        airtable_token = os.environ.get('AIRTABLE_TOKEN')
-        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
-        
-        if not airtable_token or not airtable_base_id:
-            return {"error": "Airtable credentials not configured"}
-        
-        # Filter for Democrats and Independents only
-        candidates_result = db.supabase.table('candidates').select('*').in_('party', ['DEM', 'IND']).execute()
-        candidates = candidates_result.data
-        
-        if not candidates:
-            return {"error": "No Democratic or Independent candidates found in database"}
-        
-        def map_party(party_code):
-            if not party_code:
-                return "Other"
-            party_code = str(party_code).upper()
-            if party_code in ["DEM", "DEMOCRATIC"]:
-                return "Democratic"  # Changed from "Democrat"
-            elif party_code in ["REP", "REPUBLICAN"]:
-                return "Republican"
-            elif party_code in ["IND", "INDEPENDENT"]:
-                return "Independent"
-            else:
-                return "Other"
-        
-        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
-        headers = {
-            "Authorization": f"Bearer {airtable_token}",
-            "Content-Type": "application/json"
-        }
-        
-        synced_count = 0
-        errors = []
-        
-        async with httpx.AsyncClient() as client:
-            for i in range(0, len(candidates), 10):
-                batch = candidates[i:i+10]
-                records = []
-                
-                for candidate in batch:
-                    record = {
-                        "fields": {
-                            "Full Name": str(candidate.get('full_name', '')),
-                            "Party": map_party(candidate.get('party', '')),
-                            "Jurisdiction": str(candidate.get('jurisdiction_name', '')),
-                            "Office Sought": str(candidate.get('office', '')),
-                            "Incumbent?": bool(candidate.get('incumbent', False)),
-                            "Status": "Active"
-                        }
-                    }
-                    records.append(record)
-                
-                # Minimal logging - only every 25th batch to avoid rate limits
-                if (i // 10 + 1) % 25 == 0:
-                    print(f"Synced batch {i // 10 + 1} of {len(candidates) // 10}")
-                
-                payload = {"records": records}
-                
-                try:
-                    response = await client.post(airtable_url, headers=headers, json=payload)
-                    
-                    if response.status_code == 200:
-                        synced_count += len(records)
-                    else:
-                        error_msg = f"Batch {i//10 + 1} failed: {response.status_code}"
-                        errors.append(error_msg)
-                        
-                except Exception as batch_error:
-                    error_msg = f"Batch {i//10 + 1} error: {str(batch_error)}"
-                    errors.append(error_msg)
-        
-        return {
-            "status": "completed",
-            "filter": "Democrats and Independents only",
-            "candidates_synced": synced_count,
-            "total_candidates": len(candidates),
-            "errors": errors,
-            "success_rate": f"{(synced_count/len(candidates)*100):.1f}%" if candidates else "0%"
-        }
-        
-    except Exception as e:
-        return {"error": f"Sync failed: {str(e)}"}
-
-@router.get("/check-party-values")
-async def check_party_values():
-    """Check what party values exist in the data"""
-    try:
-        candidates_result = db.supabase.table('candidates').select('party').execute()
-        parties = [c.get('party') for c in candidates_result.data if c.get('party')]
-        unique_parties = list(set(parties))
-        return {
-            "unique_parties": unique_parties, 
-            "count": len(parties),
-            "sample_parties": parties[:10]
-        }
-    except Exception as e:
-        return {"error": f"Failed to check parties: {str(e)}"}
-
-@router.get("/debug-airtable")
-async def debug_airtable():
-    """Debug endpoint to test Airtable connection and data format"""
-    try:
-        airtable_token = os.environ.get('AIRTABLE_TOKEN')
-        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
-        
-        if not airtable_token:
-            return {"error": "AIRTABLE_TOKEN not found in environment"}
-        if not airtable_base_id:
-            return {"error": "AIRTABLE_BASE_ID not found in environment"}
-        
-        test_record = {
-            "records": [{
-                "fields": {
-                    "Full Name": "Test Candidate",
-                    "Party": "Democratic",
-                    "Jurisdiction": "Test State",
-                    "Office Sought": "House",
-                    "Incumbent?": False,
-                    "Status": "Active"
-                }
-            }]
-        }
-        
-        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
-        headers = {
-            "Authorization": f"Bearer {airtable_token}",
-            "Content-Type": "application/json"
-        }
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(airtable_url, headers=headers, json=test_record)
-                
-                return {
-                    "status_code": response.status_code,
-                    "response_text": response.text,
-                    "test_record": test_record,
-                    "url": airtable_url,
-                    "token_present": bool(airtable_token),
-                    "base_id_present": bool(airtable_base_id)
-                }
-            except httpx.RequestError as e:
-                return {"error": f"HTTP request failed: {str(e)}", "error_type": "request_error"}
-            except Exception as e:
-                return {"error": f"Unexpected error: {str(e)}", "error_type": "unexpected", "exception_class": str(type(e))}
-            
-    except Exception as e:
-        return {"error": f"Outer exception: {str(e)}", "error_type": "outer", "exception_class": str(type(e))}
-
-@router.get("/democratic-collection-status")
-async def democratic_collection_status():
-    """Get status of Democratic candidate collection"""
-    try:
-        dem_result = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('jurisdiction_type', 'federal').execute()
-        dem_count = dem_result.count or 0
-        
-        ind_result = db.supabase.table('candidates').select('*', count='exact').eq('party', 'IND').eq('jurisdiction_type', 'federal').execute()
-        ind_count = ind_result.count or 0
-        
-        dem_house = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'House').execute()
-        dem_senate = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'Senate').execute()
-        dem_president = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'President').execute()
-        
-        dem_candidates = db.supabase.table('candidates').select('state').eq('party', 'DEM').eq('jurisdiction_type', 'federal').execute()
-        dem_states = [c.get('state') for c in dem_candidates.data if c.get('state')]
-        
-        from collections import Counter
-        top_dem_states = dict(Counter(dem_states).most_common(10))
-        
-        return {
-            "democratic_candidates": dem_count,
-            "independent_candidates": ind_count,
-            "democratic_breakdown": {
-                "house": dem_house.count or 0,
-                "senate": dem_senate.count or 0,
-                "president": dem_president.count or 0
-            },
-            "top_democratic_states": top_dem_states,
-            "focus": "Democrats primary, Independents secondary",
-            "next_steps": [
-                "Run /collect-democratic-candidates for full collection",
-                "Check /democratic-collection-status to monitor progress"
-            ]
-        }
-        
-    except Exception as e:
-        return {"error": f"Status check failed: {str(e)}"}
 
 @router.get("/sync-to-airtable-complete")
 async def sync_to_airtable_complete():
@@ -440,8 +183,8 @@ async def sync_to_airtable_complete():
         if not airtable_token or not airtable_base_id:
             return {"error": "Airtable credentials not configured"}
         
-        # Filter for Democrats and Independents only, remove 2026 restriction
-        candidates_result = db.supabase.table('candidates').select('*').in_('party', ['DEM', 'IND']).execute()
+        # Filter for Democrats and Independents, 2026 only
+        candidates_result = db.supabase.table('candidates').select('*').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).execute()
         candidates = candidates_result.data
         
         if not candidates:
@@ -452,7 +195,7 @@ async def sync_to_airtable_complete():
                 return "Other"
             party_code = str(party_code).upper()
             if party_code in ["DEM", "DEMOCRATIC"]:
-                return "Democratic"  # FIXED: Changed from "Democrat" to "Democratic"
+                return "Democratic"  # FIXED: Must match Airtable field exactly
             elif party_code in ["REP", "REPUBLICAN"]:
                 return "Republican"
             elif party_code in ["IND", "INDEPENDENT"]:
@@ -505,7 +248,8 @@ async def sync_to_airtable_complete():
                     # Complete field mapping matching your original schema
                     record = {
                         "fields": {
-                            "Source Candidate ID": source_id,  # This is the key field that was missing!
+                            "Candidate ID": source_id,  # Original field
+                            "Source Candidate ID": source_id,  # New field for tracking
                             "Full Name": str(candidate.get('full_name', '')),
                             "Preferred Name": str(candidate.get('preferred_name', '') or ''),
                             "Party": map_party(candidate.get('party', '')),
@@ -522,7 +266,8 @@ async def sync_to_airtable_complete():
                     candidate_records.append(record)
                 
                 if candidate_records:
-                    if (i // 10 + 1) % 10 == 0:
+                    # Minimal logging - only every 25th batch
+                    if (i // 10 + 1) % 25 == 0:
                         print(f"Syncing candidate batch {i // 10 + 1}")
                     
                     try:
@@ -609,7 +354,7 @@ async def sync_to_airtable_complete():
         
         return {
             "status": "completed",
-            "filter": "Democrats and Independents only, all cycles",
+            "filter": "Democrats and Independents only, 2026 cycle",
             "candidates_synced": candidates_synced,
             "filings_synced": filings_synced,
             "total_candidates": len(candidates),
@@ -618,19 +363,48 @@ async def sync_to_airtable_complete():
             "schema_compliance": [
                 "All original schema fields included",
                 "Proper linked records between Candidates and Filings & Finance",
-                "Social Profiles and Election Dates tables ready for future data",
-                "Democrats and Independents only, all election cycles"
+                "Democrats and Independents only, 2026 cycle",
+                "Fixed party mapping to match Airtable field options"
             ]
         }
         
     except Exception as e:
         return {"error": f"Complete sync failed: {str(e)}"}
 
-# Legacy endpoints preserved for backward compatibility
-@router.get("/sync-to-airtable-improved")
-async def sync_to_airtable_improved():
-    """Legacy endpoint - redirects to complete sync"""
-    return await sync_to_airtable_complete()
+@router.get("/democratic-collection-status")
+async def democratic_collection_status():
+    """Get status of Democratic candidate collection"""
+    try:
+        dem_result = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('jurisdiction_type', 'federal').execute()
+        dem_count = dem_result.count or 0
+        
+        ind_result = db.supabase.table('candidates').select('*', count='exact').eq('party', 'IND').eq('jurisdiction_type', 'federal').execute()
+        ind_count = ind_result.count or 0
+        
+        dem_house = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'House').execute()
+        dem_senate = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'Senate').execute()
+        dem_president = db.supabase.table('candidates').select('*', count='exact').eq('party', 'DEM').eq('office', 'President').execute()
+        
+        dem_candidates = db.supabase.table('candidates').select('state').eq('party', 'DEM').eq('jurisdiction_type', 'federal').execute()
+        dem_states = [c.get('state') for c in dem_candidates.data if c.get('state')]
+        
+        from collections import Counter
+        top_dem_states = dict(Counter(dem_states).most_common(10))
+        
+        return {
+            "democratic_candidates": dem_count,
+            "independent_candidates": ind_count,
+            "democratic_breakdown": {
+                "house": dem_house.count or 0,
+                "senate": dem_senate.count or 0,
+                "president": dem_president.count or 0
+            },
+            "top_democratic_states": top_dem_states,
+            "focus": "Democrats primary, Independents secondary"
+        }
+        
+    except Exception as e:
+        return {"error": f"Status check failed: {str(e)}"}
 
 @router.get("/cleanup-airtable-duplicates")
 async def cleanup_airtable_duplicates():
@@ -652,7 +426,6 @@ async def cleanup_airtable_duplicates():
         records_to_delete = []
         
         async with httpx.AsyncClient() as client:
-            # Get all candidates from Airtable
             try:
                 response = await client.get(candidates_url, headers=headers)
                 if response.status_code == 200:
@@ -663,7 +436,7 @@ async def cleanup_airtable_duplicates():
                     seen_ids = {}
                     for record in records:
                         fields = record.get('fields', {})
-                        source_id = fields.get('Source Candidate ID')
+                        source_id = fields.get('Source Candidate ID') or fields.get('Candidate ID')
                         
                         if source_id:
                             if source_id in seen_ids:
@@ -701,8 +474,8 @@ async def cleanup_airtable_duplicates():
     except Exception as e:
         return {"error": f"Cleanup process failed: {str(e)}"}
 
-@router.get("/validate-data")
-async def validate_data():
+@router.get("/validate-2026-data")
+async def validate_2026_data():
     """Check data quality - election cycles, missing fields, etc."""
     try:
         # Check all candidates in database
@@ -740,25 +513,67 @@ async def validate_data():
             party_distribution[party] = party_distribution.get(party, 0) + 1
             office_distribution[office] = office_distribution.get(office, 0) + 1
         
-        # Filter for Democrats and Independents
-        dem_ind_candidates = [c for c in candidates if c.get('party') in ['DEM', 'IND']]
-        
         return {
             "total_candidates": len(candidates),
-            "democrats_and_independents": len(dem_ind_candidates),
             "election_cycles": cycle_counts,
+            "candidates_2026": cycle_counts.get(2026, 0),
             "data_quality": {
                 "missing_source_ids": missing_source_ids,
                 "missing_names": missing_names
             },
-            "party_distribution": party_distribution,
-            "office_distribution": office_distribution,
+            "2026_distribution": {
+                "by_party": party_distribution,
+                "by_office": office_distribution
+            },
             "recommendations": [
-                f"Sync focus: {len(dem_ind_candidates)} Democratic and Independent candidates",
+                f"Focus sync on {cycle_counts.get(2026, 0)} candidates from 2026 cycle",
                 "Clean up records with missing source IDs" if missing_source_ids > 0 else "Source ID data looks good",
-                "All election cycles included (removed 2026-only restriction)"
+                "Review candidates from other cycles - may be legitimate early filers"
             ]
         }
         
     except Exception as e:
         return {"error": f"Validation failed: {str(e)}"}
+
+@router.get("/debug-airtable")
+async def debug_airtable():
+    """Debug endpoint to test Airtable connection and data format"""
+    try:
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Airtable credentials not configured"}
+        
+        test_record = {
+            "records": [{
+                "fields": {
+                    "Full Name": "Test Candidate",
+                    "Party": "Democratic",
+                    "Jurisdiction": "Test State",
+                    "Office Sought": "House",
+                    "Incumbent?": False,
+                    "Status": "Active"
+                }
+            }]
+        }
+        
+        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
+        headers = {
+            "Authorization": f"Bearer {airtable_token}",
+            "Content-Type": "application/json"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(airtable_url, headers=headers, json=test_record)
+            
+            return {
+                "status_code": response.status_code,
+                "response_text": response.text,
+                "test_record": test_record,
+                "headers_sent": headers,
+                "url": airtable_url
+            }
+            
+    except Exception as e:
+        return {"error": f"Debug failed: {str(e)}"}
