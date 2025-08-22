@@ -231,18 +231,36 @@ async def sync_to_airtable_complete():
         errors = []
         candidate_records_map = {}
         
+        # Track candidates we've already processed in THIS sync run
+        processed_in_this_sync = set()
+        
         async with httpx.AsyncClient() as client:
             
-            # Get existing candidates to prevent duplicates
+            # Get ALL existing candidates from Airtable to prevent duplicates
             existing_candidates = {}
             try:
-                existing_response = await client.get(candidates_url, headers=headers)
-                if existing_response.status_code == 200:
-                    existing_data = existing_response.json()
-                    for record in existing_data.get('records', []):
-                        source_id = record.get('fields', {}).get('Source Candidate ID')
-                        if source_id:
-                            existing_candidates[source_id] = record['id']
+                # Fetch all existing records with pagination
+                airtable_offset = None
+                while True:
+                    params = {}
+                    if airtable_offset:
+                        params['offset'] = airtable_offset
+                    
+                    existing_response = await client.get(candidates_url, headers=headers, params=params)
+                    if existing_response.status_code == 200:
+                        existing_data = existing_response.json()
+                        for record in existing_data.get('records', []):
+                            source_id = record.get('fields', {}).get('Source Candidate ID')
+                            if source_id:
+                                existing_candidates[source_id] = record['id']
+                        
+                        # Check if there are more records
+                        airtable_offset = existing_data.get('offset')
+                        if not airtable_offset:
+                            break
+                    else:
+                        break
+                        
             except Exception as e:
                 print(f"Warning: Could not fetch existing candidates: {e}")
             
@@ -254,10 +272,14 @@ async def sync_to_airtable_complete():
                 for candidate in batch:
                     source_id = candidate.get('source_candidate_ID', '')
                     
-                    # Skip if already exists in Airtable
-                    if source_id in existing_candidates:
-                        candidate_records_map[source_id] = existing_candidates[source_id]
+                    # Skip if already exists in Airtable OR already processed in this sync
+                    if source_id in existing_candidates or source_id in processed_in_this_sync:
+                        if source_id in existing_candidates:
+                            candidate_records_map[source_id] = existing_candidates[source_id]
                         continue
+                    
+                    # Mark as processed in this sync run
+                    processed_in_this_sync.add(source_id)
                     
                     # Complete field mapping matching your original schema
                     record = {
@@ -282,7 +304,7 @@ async def sync_to_airtable_complete():
                 if candidate_records:
                     # Minimal logging - only every 25th batch
                     if (i // 10 + 1) % 25 == 0:
-                        print(f"Syncing candidate batch {i // 10 + 1}")
+                        print(f"Syncing candidate batch {i // 10 + 1} of {len(candidates)//10}")
                     
                     try:
                         response = await client.post(candidates_url, headers=headers, json={"records": candidate_records})
@@ -291,15 +313,23 @@ async def sync_to_airtable_complete():
                             response_data = response.json()
                             candidates_synced += len(candidate_records)
                             
-                            # Map record IDs for linking
+                            # Map record IDs for linking AND update existing_candidates
                             batch_index = 0
                             for record in response_data.get('records', []):
-                                while batch_index < len(batch) and batch[batch_index].get('source_candidate_ID', '') in existing_candidates:
-                                    batch_index += 1
-                                if batch_index < len(batch):
-                                    source_id = batch[batch_index].get('source_candidate_ID', '')
+                                while batch_index < len(batch):
+                                    candidate = batch[batch_index]
+                                    source_id = candidate.get('source_candidate_ID', '')
+                                    
+                                    # Skip candidates we didn't actually create
+                                    if source_id in existing_candidates or source_id not in processed_in_this_sync:
+                                        batch_index += 1
+                                        continue
+                                    
+                                    # This is a newly created record
                                     candidate_records_map[source_id] = record['id']
+                                    existing_candidates[source_id] = record['id']  # Update for future batches
                                     batch_index += 1
+                                    break
                                 
                         else:
                             error_msg = f"Candidate batch {i//10 + 1} failed: {response.status_code} - {response.text}"
@@ -371,13 +401,14 @@ async def sync_to_airtable_complete():
             "candidates_synced": candidates_synced,
             "filings_synced": filings_synced,
             "total_candidates": len(candidates),
+            "total_existing_in_airtable": len(existing_candidates),
             "errors": errors,
             "candidate_success_rate": f"{(candidates_synced/len(candidates)*100):.1f}%" if candidates else "0%",
             "schema_compliance": [
                 "All original schema fields included",
                 "Proper linked records between Candidates and Filings & Finance",
                 "Democrats and Independents only, 2026 cycle",
-                "Fixed party mapping to match Airtable field options"
+                "Fixed duplicate prevention across paginated results"
             ]
         }
         
