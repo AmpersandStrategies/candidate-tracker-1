@@ -347,8 +347,10 @@ async def debug_airtable():
         airtable_token = os.environ.get('AIRTABLE_TOKEN')
         airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
         
-        if not airtable_token or not airtable_base_id:
-            return {"error": "Airtable credentials not configured"}
+        if not airtable_token:
+            return {"error": "AIRTABLE_TOKEN not found in environment"}
+        if not airtable_base_id:
+            return {"error": "AIRTABLE_BASE_ID not found in environment"}
         
         test_record = {
             "records": [{
@@ -370,18 +372,24 @@ async def debug_airtable():
         }
         
         async with httpx.AsyncClient() as client:
-            response = await client.post(airtable_url, headers=headers, json=test_record)
-            
-            return {
-                "status_code": response.status_code,
-                "response_text": response.text,
-                "test_record": test_record,
-                "headers_sent": headers,
-                "url": airtable_url
-            }
+            try:
+                response = await client.post(airtable_url, headers=headers, json=test_record)
+                
+                return {
+                    "status_code": response.status_code,
+                    "response_text": response.text,
+                    "test_record": test_record,
+                    "url": airtable_url,
+                    "token_present": bool(airtable_token),
+                    "base_id_present": bool(airtable_base_id)
+                }
+            except httpx.RequestError as e:
+                return {"error": f"HTTP request failed: {str(e)}", "error_type": "request_error"}
+            except Exception as e:
+                return {"error": f"Unexpected error: {str(e)}", "error_type": "unexpected", "exception_class": str(type(e))}
             
     except Exception as e:
-        return {"error": f"Debug failed: {str(e)}"}
+        return {"error": f"Outer exception: {str(e)}", "error_type": "outer", "exception_class": str(type(e))}
 
 @router.get("/democratic-collection-status")
 async def democratic_collection_status():
