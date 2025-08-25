@@ -408,6 +408,155 @@ async def debug_filings():
     except Exception as e:
         return {"error": f"Debug failed: {str(e)}"}
 
+@router.get("/collect-financial-data")
+async def collect_financial_data():
+    """Collect financial data from FEC reports API for existing candidates"""
+    try:
+        api_key = os.environ.get('FEC_API_KEY')
+        if not api_key:
+            return {"error": "FEC_API_KEY not found"}
+        
+        # Get candidates that need financial data
+        candidates_result = db.supabase.table('candidates').select('source_candidate_ID, candidate_name, party').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).execute()
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {"error": "No candidates found"}
+        
+        financial_data_collected = 0
+        candidates_with_committees = 0
+        errors = []
+        
+        # Process candidates to find their committees and financial data
+        for i, candidate in enumerate(candidates):
+            try:
+                source_candidate_id = candidate.get('source_candidate_ID')
+                if not source_candidate_id:
+                    continue
+                
+                # Get committees for this candidate
+                committees_url = "https://api.open.fec.gov/v1/committees/"
+                committee_params = {
+                    'api_key': api_key,
+                    'candidate_id': source_candidate_id,
+                    'per_page': 100
+                }
+                
+                async with httpx.AsyncClient() as client:
+                    committee_response = await client.get(committees_url, params=committee_params)
+                    
+                    if committee_response.status_code != 200:
+                        continue
+                    
+                    committee_data = committee_response.json()
+                    committees = committee_data.get('results', [])
+                    
+                    if not committees:
+                        continue
+                    
+                    candidates_with_committees += 1
+                    
+                    # Get financial reports for the primary committee
+                    primary_committee = committees[0]
+                    committee_id = primary_committee.get('committee_id')
+                    
+                    if committee_id:
+                        # Get latest financial reports
+                        reports_url = "https://api.open.fec.gov/v1/reports/"
+                        reports_params = {
+                            'api_key': api_key,
+                            'committee_id': committee_id,
+                            'per_page': 10,
+                            'sort': '-coverage_end_date'  # Most recent first
+                        }
+                        
+                        reports_response = await client.get(reports_url, params=reports_params)
+                        
+                        if reports_response.status_code == 200:
+                            reports_data = reports_response.json()
+                            reports = reports_data.get('results', [])
+                            
+                            if reports:
+                                latest_report = reports[0]
+                                
+                                # Extract financial data
+                                financial_update = {
+                                    'cash_on_hand': latest_report.get('cash_on_hand_end_period', 0),
+                                    'total_receipts': latest_report.get('total_receipts', 0),
+                                    'total_disbursements': latest_report.get('total_disbursements', 0),
+                                    'debts_owed': latest_report.get('debts_owed', 0),
+                                    'report_date': latest_report.get('coverage_end_date'),
+                                    'committee_id': committee_id,
+                                    'committee_name': primary_committee.get('name', ''),
+                                    'last_financial_update': datetime.utcnow().isoformat()
+                                }
+                                
+                                # Update candidate record with financial data
+                                db.supabase.table('candidates').update(financial_update).eq('source_candidate_ID', source_candidate_id).execute()
+                                financial_data_collected += 1
+                
+                # Progress logging every 100 candidates
+                if (i + 1) % 100 == 0:
+                    print(f"Processed {i + 1} candidates, found financial data for {financial_data_collected}")
+                
+                # Rate limiting - respect FEC API limits
+                await asyncio.sleep(0.2)
+                
+            except Exception as e:
+                errors.append(f"Error processing candidate {source_candidate_id}: {str(e)}")
+                continue
+        
+        return {
+            "status": "completed",
+            "total_candidates_processed": len(candidates),
+            "candidates_with_committees": candidates_with_committees,
+            "financial_data_collected": financial_data_collected,
+            "errors": errors[:10],
+            "next_steps": [
+                "Add financial fields back to Airtable as Currency type",
+                "Update sync function to include real financial data",
+                "Set up quarterly automation for financial updates"
+            ]
+        }
+        
+    except Exception as e:
+        return {"error": f"Financial collection failed: {str(e)}"}
+
+@router.get("/setup-automated-updates")
+async def setup_automated_updates():
+    """Information endpoint for setting up automated daily/quarterly updates"""
+    return {
+        "automation_plan": {
+            "daily_updates": {
+                "schedule": "Every night at 2 AM EST",
+                "functions": [
+                    "/collect-democratic-candidates - New candidate registrations",
+                    "/collect-filings-urls - New FEC filings and PDF links"
+                ],
+                "purpose": "Catch new candidates and recent filings"
+            },
+            "quarterly_updates": {
+                "schedule": "Day after FEC reporting deadlines",
+                "dates": ["February 1", "April 16", "July 16", "October 16"],
+                "functions": [
+                    "/collect-financial-data - Updated financial reports",
+                    "/sync-to-airtable-complete - Refresh Airtable with new financial data"
+                ],
+                "purpose": "Update financial totals when new quarterly reports are filed"
+            }
+        },
+        "implementation_options": {
+            "railway_cron": "Use Railway's built-in cron job scheduling",
+            "external_service": "Use GitHub Actions or external scheduler to ping endpoints",
+            "webhook_triggers": "Set up webhooks for FEC filing notifications (advanced)"
+        },
+        "monitoring": {
+            "success_metrics": "Track collection counts and sync success rates",
+            "failure_alerts": "Email notifications for API failures or data anomalies",
+            "data_quality": "Automated checks for missing financial data or broken links"
+        }
+    }
+
 @router.get("/sync-filings-only")
 async def sync_filings_only():
     """Create filing records without financial fields - bypass deployment cache"""
