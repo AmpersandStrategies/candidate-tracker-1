@@ -367,7 +367,12 @@ async def cleanup_airtable_duplicates():
                 delete_data = {"records": [{"id": record_id} for record_id in batch]}
                 
                 async with httpx.AsyncClient() as client:
-                    response = await client.delete(airtable_url, headers=headers, json=delete_data)
+                    response = await client.request(
+                        "DELETE", 
+                        airtable_url, 
+                        headers=headers, 
+                        json=delete_data
+                    )
                     if response.status_code == 200:
                         deleted_count += len(batch)
         
