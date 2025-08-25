@@ -1,3 +1,4 @@
+"""FastAPI routes - Updated to remove financial fields"""
 """FastAPI routes"""
 from fastapi import APIRouter, Query
 from typing import Optional
