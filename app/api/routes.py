@@ -594,12 +594,14 @@ async def sync_to_airtable_complete():
                     "fields": {
                         "Filing ID": source_candidate_id,
                         "Candidate": [candidate_record_id],
+                        "Filing Date": datetime.now().strftime('%Y-%m-%d'),
                         "Committee Name": str(candidate.get('candidate_name', '')),
-                        "Committee ID": source_candidate_id,
+                        "CommitteeID": source_candidate_id,  # Fixed: no space
                         "COH $": 0,
                         "Total Raised": 0,
                         "Total Spent": 0,
-                        "Filing Date": datetime.now().strftime('%Y-%m-%d')
+                        "Last Report Date": datetime.now().strftime('%Y-%m-%d'),
+                        "Funding Source Link": ""
                     }
                 }
                 filing_records.append(filing_record)
