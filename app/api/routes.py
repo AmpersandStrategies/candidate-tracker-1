@@ -417,7 +417,7 @@ async def collect_financial_data():
             return {"error": "FEC_API_KEY not found"}
         
         # Get candidates that need financial data
-        candidates_result = db.supabase.table('candidates').select('source_candidate_ID, candidate_name, party').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).execute()
+        candidates_result = db.supabase.table('candidates').select('source_candidate_ID, full_name, party').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).execute()
         candidates = candidates_result.data
         
         if not candidates:
@@ -503,7 +503,8 @@ async def collect_financial_data():
                 await asyncio.sleep(0.2)
                 
             except Exception as e:
-                errors.append(f"Error processing candidate {source_candidate_id}: {str(e)}")
+                candidate_name = candidate.get('full_name', 'Unknown')
+                errors.append(f"Error processing candidate {candidate_name} ({source_candidate_id}): {str(e)}")
                 continue
         
         return {
