@@ -385,6 +385,29 @@ async def cleanup_airtable_duplicates():
     except Exception as e:
         return {"error": f"Cleanup failed: {str(e)}"}
 
+@router.get("/debug-filings")
+async def debug_filings():
+    """Debug endpoint to check Filings & Finance table access"""
+    try:
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        filings_url = f"https://api.airtable.com/v0/{airtable_base_id}/Filings%20%26%20Finance"
+        headers = {"Authorization": f"Bearer {airtable_token}"}
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(filings_url, headers=headers, params={"pageSize": 1})
+            
+            return {
+                "status_code": response.status_code,
+                "response_text": response.text,
+                "url": filings_url,
+                "headers_sent": list(headers.keys())
+            }
+            
+    except Exception as e:
+        return {"error": f"Debug failed: {str(e)}"}
+
 @router.get("/sync-to-airtable-complete")
 async def sync_to_airtable_complete():
     """Complete sync with all schema fields and proper linked records - Democrats and Independents only"""
@@ -618,4 +641,3 @@ async def sync_to_airtable_complete():
         
     except Exception as e:
         return {"error": f"Sync failed: {str(e)}"}
-        
