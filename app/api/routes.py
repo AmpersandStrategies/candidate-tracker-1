@@ -1,4 +1,3 @@
-"""FastAPI routes - Updated and removed financial fields"""
 """FastAPI routes"""
 from fastapi import APIRouter, Query
 from typing import Optional
@@ -408,6 +407,131 @@ async def debug_filings():
             
     except Exception as e:
         return {"error": f"Debug failed: {str(e)}"}
+
+@router.get("/sync-filings-only")
+async def sync_filings_only():
+    """Create filing records without financial fields - bypass deployment cache"""
+    try:
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Missing Airtable credentials"}
+        
+        # Get candidates from database
+        candidates = []
+        page_size = 1000
+        offset = 0
+
+        while True:
+            batch_result = db.supabase.table('candidates').select('*').eq('election_cycle', 2026).in_('party', ['DEM', 'IND']).range(offset, offset + page_size - 1).execute()
+            
+            if not batch_result.data:
+                break
+                
+            candidates.extend(batch_result.data)
+            
+            if len(batch_result.data) < page_size:
+                break
+                
+            offset += page_size
+        
+        if not candidates:
+            return {"error": "No candidates found"}
+        
+        # Get existing Airtable candidate records
+        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
+        headers = {"Authorization": f"Bearer {airtable_token}", "Content-Type": "application/json"}
+        
+        existing_candidates = {}
+        async with httpx.AsyncClient() as client:
+            offset = None
+            while True:
+                params = {"pageSize": 100}
+                if offset:
+                    params["offset"] = offset
+                
+                response = await client.get(airtable_url, headers=headers, params=params)
+                if response.status_code != 200:
+                    break
+                
+                data = response.json()
+                for record in data.get('records', []):
+                    source_id = record.get('fields', {}).get('Source Candidate ID')
+                    if source_id:
+                        existing_candidates[source_id] = record['id']
+                
+                offset = data.get('offset')
+                if not offset:
+                    break
+        
+        # Create filing records
+        filings_url = f"https://api.airtable.com/v0/{airtable_base_id}/Filings%20%26%20Finance"
+        filings_synced = 0
+        errors = []
+        
+        for i in range(0, len(candidates), 10):
+            candidate_batch = candidates[i:i+10]
+            filing_records = []
+            
+            for candidate in candidate_batch:
+                source_candidate_id = candidate.get('source_candidate_ID')
+                
+                if not source_candidate_id:
+                    continue
+                
+                # Get candidate record ID for linking
+                candidate_record_id = existing_candidates.get(source_candidate_id)
+                if not candidate_record_id:
+                    continue
+                
+                # Create filing record with minimal fields
+                filing_record = {
+                    "fields": {
+                        "Filing ID": source_candidate_id,
+                        "Candidate": [candidate_record_id],
+                        "Filing Date": datetime.now().strftime('%Y-%m-%d'),
+                        "Committee Name": str(candidate.get('candidate_name', '')),
+                        "CommitteeID": source_candidate_id,
+                        "Last Report Date": datetime.now().strftime('%Y-%m-%d'),
+                        "Funding Source Link": ""
+                    }
+                }
+                filing_records.append(filing_record)
+            
+            # Sync filing batch
+            if filing_records:
+                try:
+                    if (i // 10 + 1) % 25 == 0:
+                        print(f"Syncing filing batch {i // 10 + 1}")
+                    
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            filings_url,
+                            headers=headers,
+                            json={"records": filing_records}
+                        )
+                        
+                        if response.status_code == 200:
+                            response_data = response.json()
+                            filings_synced += len(response_data.get('records', []))
+                        else:
+                            errors.append(f"Filing batch {i // 10 + 1} failed: {response.status_code} - {response.text}")
+                            
+                except Exception as e:
+                    errors.append(f"Filing batch {i // 10 + 1} error: {str(e)}")
+            
+            await asyncio.sleep(0.1)
+        
+        return {
+            "status": "completed",
+            "filings_synced": filings_synced,
+            "total_candidates": len(candidates),
+            "errors": errors[:5]
+        }
+        
+    except Exception as e:
+        return {"error": f"Sync failed: {str(e)}"}
 
 @router.get("/sync-to-airtable-complete")
 async def sync_to_airtable_complete():
