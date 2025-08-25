@@ -364,15 +364,13 @@ async def cleanup_airtable_duplicates():
             # Delete in batches of 10 (Airtable limit)
             for i in range(0, len(duplicates), 10):
                 batch = duplicates[i:i+10]
-                delete_data = {"records": [{"id": record_id} for record_id in batch]}
+                
+                # Use query parameters for delete
+                record_ids = "&".join([f"records[]={record_id}" for record_id in batch])
+                delete_url = f"{airtable_url}?{record_ids}"
                 
                 async with httpx.AsyncClient() as client:
-                    response = await client.request(
-                        "DELETE", 
-                        airtable_url, 
-                        headers=headers, 
-                        json=delete_data
-                    )
+                    response = await client.delete(delete_url, headers=headers)
                     if response.status_code == 200:
                         deleted_count += len(batch)
         
@@ -620,3 +618,4 @@ async def sync_to_airtable_complete():
         
     except Exception as e:
         return {"error": f"Sync failed: {str(e)}"}
+        
