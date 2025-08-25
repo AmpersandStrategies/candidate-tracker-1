@@ -490,7 +490,7 @@ async def sync_to_airtable_complete():
             candidate_records = []
             
             for candidate in candidate_batch:
-                source_candidate_id = candidate.get('source_candidate_id')
+                source_candidate_id = candidate.get('source_candidate_ID')  # Capital ID
                 
                 # Skip if already processed or exists
                 if not source_candidate_id or source_candidate_id in processed_in_this_sync or source_candidate_id in existing_candidates:
@@ -578,7 +578,7 @@ async def sync_to_airtable_complete():
             filing_records = []
             
             for candidate in candidate_batch:
-                source_candidate_id = candidate.get('source_candidate_id')
+                source_candidate_id = candidate.get('source_candidate_ID')  # Capital ID
                 
                 # Skip if filing already exists
                 if not source_candidate_id or source_candidate_id in existing_filings:
@@ -641,29 +641,3 @@ async def sync_to_airtable_complete():
         
     except Exception as e:
         return {"error": f"Sync failed: {str(e)}"}
-
-@router.get("/debug-candidates")
-async def debug_candidates():
-    """Debug candidate records to check Source Candidate ID field"""
-    try:
-        # Check first few database candidates
-        db_result = db.supabase.table('candidates').select('source_candidate_id, candidate_name').limit(5).execute()
-        
-        # Check first few Airtable candidates
-        airtable_token = os.environ.get('AIRTABLE_TOKEN')
-        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
-        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
-        headers = {"Authorization": f"Bearer {airtable_token}"}
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(airtable_url, headers=headers, params={"pageSize": 5})
-            airtable_data = response.json() if response.status_code == 200 else {}
-        
-        return {
-            "database_candidates": db_result.data,
-            "airtable_candidates": airtable_data.get('records', []),
-            "comparison": "Check if Source Candidate ID values match"
-        }
-        
-    except Exception as e:
-        return {"error": str(e)}
