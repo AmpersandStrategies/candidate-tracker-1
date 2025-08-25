@@ -643,3 +643,4 @@ async def sync_to_airtable_complete():
         
     except Exception as e:
         return {"error": f"Sync failed: {str(e)}"}
+        
