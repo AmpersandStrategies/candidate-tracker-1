@@ -642,6 +642,120 @@ async def setup_automated_updates():
         }
     }
 
+@router.get("/sync-candidates-fresh")
+async def sync_candidates_fresh():
+    """Fresh sync endpoint to bypass deployment caching issues"""
+    try:
+        airtable_token = os.environ.get('AIRTABLE_TOKEN')
+        airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
+        
+        if not airtable_token or not airtable_base_id:
+            return {"error": "Missing Airtable credentials"}
+        
+        def map_party(party_code):
+            if not party_code:
+                return "Other"
+            party_code = str(party_code).upper()
+            if party_code in ["DEM", "DEMOCRATIC"]:
+                return "Democratic"
+            elif party_code in ["REP", "REPUBLICAN"]:
+                return "Republican"
+            elif party_code in ["IND", "INDEPENDENT"]:
+                return "Independent"
+            else:
+                return "Other"
+        
+        # Get candidates from database
+        candidates_result = db.supabase.table('candidates').select('*').execute()
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {"error": "No candidates found in database"}
+        
+        # Get existing Airtable candidates
+        airtable_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
+        headers = {"Authorization": f"Bearer {airtable_token}", "Content-Type": "application/json"}
+        
+        existing_candidates = {}
+        async with httpx.AsyncClient() as client:
+            offset = None
+            while True:
+                params = {"pageSize": 100}
+                if offset:
+                    params["offset"] = offset
+                
+                response = await client.get(airtable_url, headers=headers, params=params)
+                if response.status_code != 200:
+                    break
+                
+                data = response.json()
+                for record in data.get('records', []):
+                    source_id = record.get('fields', {}).get('Source Candidate ID')
+                    if source_id:
+                        existing_candidates[source_id] = record['id']
+                
+                offset = data.get('offset')
+                if not offset:
+                    break
+        
+        candidates_synced = 0
+        errors = []
+        
+        # Process candidates in batches
+        for i in range(0, len(candidates), 10):
+            candidate_batch = candidates[i:i+10]
+            candidate_records = []
+            
+            for candidate in candidate_batch:
+                source_candidate_id = candidate.get('source_candidate_ID')
+                
+                if not source_candidate_id or source_candidate_id in existing_candidates:
+                    continue
+                
+                candidate_record = {
+                    "fields": {
+                        "Source Candidate ID": source_candidate_id,
+                        "Full Name": str(candidate.get('full_name', '')),
+                        "Party": map_party(candidate.get('party')),
+                        "Jurisdiction": str(candidate.get('jurisdiction_name', '')),
+                        "Office Sought": str(candidate.get('office', '')),
+                        "Incumbent?": bool(candidate.get('incumbent', False)),
+                        "Status": candidate.get('status', 'Active')
+                    }
+                }
+                candidate_records.append(candidate_record)
+            
+            if candidate_records:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            airtable_url,
+                            headers=headers,
+                            json={"records": candidate_records}
+                        )
+                        
+                        if response.status_code == 200:
+                            response_data = response.json()
+                            candidates_synced += len(response_data.get('records', []))
+                        else:
+                            errors.append(f"Batch {i//10 + 1} failed: {response.status_code} - {response.text}")
+                            
+                except Exception as e:
+                    errors.append(f"Batch {i//10 + 1} error: {str(e)}")
+            
+            await asyncio.sleep(0.1)
+        
+        return {
+            "status": "completed",
+            "database_candidates": len(candidates),
+            "existing_airtable_candidates": len(existing_candidates),
+            "candidates_synced": candidates_synced,
+            "errors": errors[:5]
+        }
+        
+    except Exception as e:
+        return {"error": f"Fresh sync failed: {str(e)}"}
+
 @router.get("/sync-filings-only")
 async def sync_filings_only():
     """Create filing records without financial fields - bypass deployment cache"""
