@@ -699,6 +699,25 @@ async def sync_candidates_fresh():
         if not airtable_token or not airtable_base_id:
             return {"error": "Missing Airtable credentials"}
         
+        def map_party(party_code):
+            # Handle all possible null/empty cases first
+            if party_code is None:
+                return "Other"
+            
+            party_str = str(party_code).strip()
+            if party_str == "" or party_str.upper() == "N" or party_str.upper() == "NULL":
+                return "Other"
+            
+            party_upper = party_str.upper()
+            if party_upper in ["DEM", "DEMOCRATIC"]:
+                return "Democratic"
+            elif party_upper in ["REP", "REPUBLICAN"]:
+                return "Republican" 
+            elif party_upper in ["IND", "INDEPENDENT"]:
+                return "Independent"
+            else:
+                return "Other"
+        
         def map_status(status_code):
             if not status_code:
                 return "Active"
