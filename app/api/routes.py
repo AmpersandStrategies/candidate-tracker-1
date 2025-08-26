@@ -653,9 +653,9 @@ async def sync_candidates_fresh():
             return {"error": "Missing Airtable credentials"}
         
         def map_party(party_code):
-            if not party_code:
+            if not party_code or party_code == "N" or party_code == "" or str(party_code).strip() == "":
                 return "Other"
-            party_code = str(party_code).upper()
+            party_code = str(party_code).upper().strip()
             if party_code in ["DEM", "DEMOCRATIC"]:
                 return "Democratic"
             elif party_code in ["REP", "REPUBLICAN"]:
@@ -665,9 +665,23 @@ async def sync_candidates_fresh():
             else:
                 return "Other"
         
-        # Get candidates from database
-        candidates_result = db.supabase.table('candidates').select('*').execute()
-        candidates = candidates_result.data
+        # Get ALL candidates from database with pagination
+        candidates = []
+        page_size = 1000
+        offset = 0
+
+        while True:
+            batch_result = db.supabase.table('candidates').select('*').range(offset, offset + page_size - 1).execute()
+            
+            if not batch_result.data:
+                break
+                
+            candidates.extend(batch_result.data)
+            
+            if len(batch_result.data) < page_size:
+                break
+                
+            offset += page_size
         
         if not candidates:
             return {"error": "No candidates found in database"}
