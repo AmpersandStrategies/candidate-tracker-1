@@ -88,20 +88,20 @@ async def collect_democratic_candidates():
                                 for candidate in candidates:
                                     cycle_candidates_found += 1
                                     
-                                    # Store candidate in database
+                                    # Store candidate in database with correct column names
                                     candidate_data = {
-                                        'source_candidate_id': candidate.get('candidate_id'),
-                                        'candidate_name': candidate.get('name'),
+                                        'source_candidate_ID': candidate.get('candidate_id'),  # Capital ID
+                                        'full_name': candidate.get('name'),  # Not candidate_name
                                         'party': candidate.get('party'),
                                         'office': candidate.get('office_full', office),
                                         'election_cycle': cycle,
                                         'state': candidate.get('state'),
                                         'district': candidate.get('district'),
-                                        'incumbent_challenger': candidate.get('incumbent_challenger'),
-                                        'candidate_status': candidate.get('candidate_status'),
-                                        'active_through': candidate.get('active_through'),
+                                        'incumbent': candidate.get('incumbent_challenger') == 'I',  # Boolean, not text
+                                        'status': candidate.get('candidate_status'),  # Not candidate_status
                                         'jurisdiction_name': f"{candidate.get('state', 'Unknown')} {office}",
-                                        'last_updated': datetime.utcnow().isoformat()
+                                        'source_system': 'FEC',
+                                        'updated_at': datetime.utcnow().isoformat()  # Not last_updated
                                     }
                                     
                                     try:
