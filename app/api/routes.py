@@ -699,7 +699,19 @@ async def sync_candidates_fresh():
         if not airtable_token or not airtable_base_id:
             return {"error": "Missing Airtable credentials"}
         
-        def map_party(party_code):
+        def map_status(status_code):
+            if not status_code:
+                return "Active"
+            
+            status_str = str(status_code).strip().upper()
+            if status_str == "C":
+                return "Active"  # C = Current/Active
+            elif status_str == "N":
+                return "Active"  # N = New/Active  
+            elif status_str == "P":
+                return "Inactive"  # P = Past/Inactive
+            else:
+                return "Active"
             # Handle all possible null/empty cases first
             if party_code is None:
                 return "Other"
@@ -787,7 +799,7 @@ async def sync_candidates_fresh():
                         "Jurisdiction": str(candidate.get('jurisdiction_name', '')),
                         "Office Sought": str(candidate.get('office', '')),
                         "Incumbent?": bool(candidate.get('incumbent', False)),
-                        "Status": candidate.get('status', 'Active')
+                        "Status": map_status(candidate.get('status'))
                     }
                 }
                 candidate_records.append(candidate_record)
