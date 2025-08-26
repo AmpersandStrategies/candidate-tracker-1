@@ -642,6 +642,79 @@ async def setup_automated_updates():
         }
     }
 
+@router.get("/cleanup-database-duplicates")
+async def cleanup_database_duplicates():
+    """Remove duplicate candidates from database, keeping the newest record for each"""
+    try:
+        # Get all candidates
+        all_candidates = []
+        page_size = 1000
+        offset = 0
+
+        while True:
+            batch_result = db.supabase.table('candidates').select('*').range(offset, offset + page_size - 1).execute()
+            
+            if not batch_result.data:
+                break
+                
+            all_candidates.extend(batch_result.data)
+            
+            if len(batch_result.data) < page_size:
+                break
+                
+            offset += page_size
+
+        # Group by source_candidate_ID to find duplicates
+        candidate_groups = {}
+        for candidate in all_candidates:
+            source_id = candidate.get('source_candidate_ID')
+            if source_id:
+                if source_id not in candidate_groups:
+                    candidate_groups[source_id] = []
+                candidate_groups[source_id].append(candidate)
+
+        # Identify duplicates and records to keep/delete
+        duplicates_found = 0
+        records_to_delete = []
+        
+        for source_id, candidates in candidate_groups.items():
+            if len(candidates) > 1:
+                duplicates_found += len(candidates) - 1
+                
+                # Sort by created_at desc to keep the newest
+                sorted_candidates = sorted(candidates, key=lambda x: x.get('created_at', ''), reverse=True)
+                
+                # Keep the first (newest), delete the rest
+                for candidate_to_delete in sorted_candidates[1:]:
+                    records_to_delete.append(candidate_to_delete['candidate_id'])
+
+        # Delete duplicate records in batches
+        deleted_count = 0
+        batch_size = 50
+        
+        for i in range(0, len(records_to_delete), batch_size):
+            batch = records_to_delete[i:i + batch_size]
+            
+            for record_id in batch:
+                try:
+                    db.supabase.table('candidates').delete().eq('candidate_id', record_id).execute()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"Failed to delete record {record_id}: {e}")
+
+        return {
+            "status": "completed",
+            "total_candidates_before": len(all_candidates),
+            "unique_source_ids": len(candidate_groups),
+            "duplicates_found": duplicates_found,
+            "records_deleted": deleted_count,
+            "total_candidates_after": len(all_candidates) - deleted_count,
+            "cleanup_summary": f"Removed {deleted_count} duplicate records, kept newest version of each candidate"
+        }
+
+    except Exception as e:
+        return {"error": f"Cleanup failed: {str(e)}"}
+
 @router.get("/debug-party-mapping")
 async def debug_party_mapping():
     """Debug what party values are actually being processed"""
