@@ -642,6 +642,53 @@ async def setup_automated_updates():
         }
     }
 
+@router.get("/debug-party-mapping")
+async def debug_party_mapping():
+    """Debug what party values are actually being processed"""
+    try:
+        # Get first 10 candidates to examine their party values
+        candidates_result = db.supabase.table('candidates').select('source_candidate_ID, full_name, party').limit(10).execute()
+        candidates = candidates_result.data
+        
+        debug_info = []
+        for candidate in candidates:
+            party_raw = candidate.get('party')
+            
+            # Test the mapping function
+            def map_party_debug(party_code):
+                if party_code is None:
+                    return "Other", "was None"
+                
+                party_str = str(party_code).strip()
+                if party_str == "" or party_str.upper() == "N" or party_str.upper() == "NULL":
+                    return "Other", f"was empty/N/NULL: '{party_str}'"
+                
+                party_upper = party_str.upper()
+                if party_upper in ["DEM", "DEMOCRATIC"]:
+                    return "Democratic", f"mapped from: '{party_str}'"
+                elif party_upper in ["REP", "REPUBLICAN"]:
+                    return "Republican", f"mapped from: '{party_str}'"
+                elif party_upper in ["IND", "INDEPENDENT"]:
+                    return "Independent", f"mapped from: '{party_str}'"
+                else:
+                    return "Other", f"unknown value: '{party_str}'"
+            
+            mapped_party, reason = map_party_debug(party_raw)
+            
+            debug_info.append({
+                "candidate_name": candidate.get('full_name'),
+                "source_id": candidate.get('source_candidate_ID'),
+                "raw_party": party_raw,
+                "raw_party_type": str(type(party_raw)),
+                "mapped_party": mapped_party,
+                "mapping_reason": reason
+            })
+        
+        return {"debug_results": debug_info}
+        
+    except Exception as e:
+        return {"error": f"Debug failed: {str(e)}"}
+
 @router.get("/sync-candidates-fresh")
 async def sync_candidates_fresh():
     """Fresh sync endpoint to bypass deployment caching issues"""
