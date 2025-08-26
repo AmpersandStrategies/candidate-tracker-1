@@ -653,14 +653,20 @@ async def sync_candidates_fresh():
             return {"error": "Missing Airtable credentials"}
         
         def map_party(party_code):
-            if not party_code or party_code == "N" or party_code == "" or str(party_code).strip() == "":
+            # Handle all possible null/empty cases first
+            if party_code is None:
                 return "Other"
-            party_code = str(party_code).upper().strip()
-            if party_code in ["DEM", "DEMOCRATIC"]:
+            
+            party_str = str(party_code).strip()
+            if party_str == "" or party_str.upper() == "N" or party_str.upper() == "NULL":
+                return "Other"
+            
+            party_upper = party_str.upper()
+            if party_upper in ["DEM", "DEMOCRATIC"]:
                 return "Democratic"
-            elif party_code in ["REP", "REPUBLICAN"]:
-                return "Republican"
-            elif party_code in ["IND", "INDEPENDENT"]:
+            elif party_upper in ["REP", "REPUBLICAN"]:
+                return "Republican" 
+            elif party_upper in ["IND", "INDEPENDENT"]:
                 return "Independent"
             else:
                 return "Other"
