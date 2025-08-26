@@ -66,7 +66,7 @@ async def collect_democratic_candidates():
                         while True:
                             params = {
                                 'api_key': api_key,
-                                'election_year': cycle,
+                                'cycle': cycle,  # Changed from 'election_year' to 'cycle'
                                 'office': office,
                                 'party': party,
                                 'per_page': 100,
