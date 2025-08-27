@@ -508,7 +508,16 @@ async def collect_financial_data_to_filings(batch_size: int = 25, start_offset: 
                     continue
                 
                 # Find existing filing record for this candidate
-                filing_result = db.supabase.table('filings').select('filing_id').eq('source_candidate_id', source_candidate_id).execute()
+                # First get the candidate's UUID from candidates table
+                candidate_result = db.supabase.table('candidates').select('candidate_id').eq('source_candidate_ID', source_candidate_id).execute()
+                
+                if not candidate_result.data:
+                    continue  # Skip if candidate not found
+                
+                candidate_uuid = candidate_result.data[0]['candidate_id']
+                
+                # Find filing record using the candidate UUID
+                filing_result = db.supabase.table('filings').select('filing_id').eq('candidate_id', candidate_uuid).execute()
                 
                 if not filing_result.data:
                     continue  # Skip if no filing record exists
