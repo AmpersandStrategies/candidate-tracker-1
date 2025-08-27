@@ -476,6 +476,160 @@ async def debug_financial_collection():
     except Exception as e:
         return {"error": f"Debug failed: {str(e)}"}
 
+@router.get("/collect-financial-data-to-filings")
+async def collect_financial_data_to_filings(batch_size: int = 25, start_offset: int = 0):
+    """Collect financial data and update filings table records"""
+    try:
+        api_key = os.environ.get('FEC_API_KEY')
+        if not api_key:
+            return {"error": "FEC_API_KEY not found"}
+        
+        # Get candidates in batches
+        candidates_result = db.supabase.table('candidates').select('source_candidate_ID, full_name, party').range(start_offset, start_offset + batch_size - 1).execute()
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {"error": "No candidates found in this batch"}
+        
+        financial_data_updated = 0
+        soo_links_found = 0
+        candidates_with_committees = 0
+        candidates_no_committees = 0
+        api_errors = 0
+        errors = []
+        
+        # Process candidates with proper rate limiting
+        for i, candidate in enumerate(candidates):
+            try:
+                source_candidate_id = candidate.get('source_candidate_ID')
+                candidate_name = candidate.get('full_name', 'Unknown')
+                
+                if not source_candidate_id:
+                    continue
+                
+                # Find existing filing record for this candidate
+                filing_result = db.supabase.table('filings').select('filing_id').eq('source_candidate_id', source_candidate_id).execute()
+                
+                if not filing_result.data:
+                    continue  # Skip if no filing record exists
+                
+                filing_id = filing_result.data[0]['filing_id']
+                
+                # Get committees for this candidate
+                committees_url = "https://api.open.fec.gov/v1/committees/"
+                committee_params = {
+                    'api_key': api_key,
+                    'candidate_id': source_candidate_id,
+                    'per_page': 10
+                }
+                
+                async with httpx.AsyncClient() as client:
+                    committee_response = await client.get(committees_url, params=committee_params)
+                    
+                    if committee_response.status_code == 429:  # Rate limited
+                        await asyncio.sleep(60)
+                        committee_response = await client.get(committees_url, params=committee_params)
+                    
+                    if committee_response.status_code != 200:
+                        api_errors += 1
+                        continue
+                    
+                    committee_data = committee_response.json()
+                    committees = committee_data.get('results', [])
+                    
+                    if not committees:
+                        candidates_no_committees += 1
+                        continue
+                    
+                    candidates_with_committees += 1
+                    primary_committee = committees[0]
+                    committee_id = primary_committee.get('committee_id')
+                    
+                    if committee_id:
+                        filing_updates = {
+                            'committee_id': committee_id
+                        }
+                        
+                        # Look for Form 1 (SOO) filings
+                        filings_url = "https://api.open.fec.gov/v1/filings/"
+                        filings_params = {
+                            'api_key': api_key,
+                            'committee_id': committee_id,
+                            'form_type': 'F1',
+                            'per_page': 5
+                        }
+                        
+                        filings_response = await client.get(filings_url, params=filings_params)
+                        if filings_response.status_code == 200:
+                            filings_data = filings_response.json()
+                            filings = filings_data.get('results', [])
+                            if filings and filings[0].get('pdf_url'):
+                                filing_updates['statement_of_org'] = filings[0]['pdf_url']
+                                soo_links_found += 1
+                        
+                        # Try for financial reports
+                        reports_url = "https://api.open.fec.gov/v1/reports/"
+                        reports_params = {
+                            'api_key': api_key,
+                            'committee_id': committee_id,
+                            'per_page': 3,
+                            'sort': '-coverage_end_date'
+                        }
+                        
+                        reports_response = await client.get(reports_url, params=reports_params)
+                        if reports_response.status_code == 200:
+                            reports_data = reports_response.json()
+                            reports = reports_data.get('results', [])
+                            if reports:
+                                latest_report = reports[0]
+                                filing_updates.update({
+                                    'total_receipts': latest_report.get('total_receipts', 0),
+                                    'total_disbursements': latest_report.get('total_disbursements', 0),
+                                    'cash_on_hand': latest_report.get('cash_on_hand_end_period', 0),
+                                    'debts_owed': latest_report.get('debts_owed', 0),
+                                    'period_end': latest_report.get('coverage_end_date'),
+                                    'source_url': latest_report.get('pdf_url', '')
+                                })
+                                financial_data_updated += 1
+                        
+                        # Update filing record with collected data
+                        if len(filing_updates) > 1:  # More than just committee_id
+                            db.supabase.table('filings').update(filing_updates).eq('filing_id', filing_id).execute()
+                
+                # Rate limiting - 3 seconds between candidates
+                await asyncio.sleep(3.0)
+                
+            except Exception as e:
+                errors.append(f"Error processing {candidate_name} ({source_candidate_id}): {str(e)}")
+                continue
+        
+        # Calculate next batch info
+        next_offset = start_offset + batch_size
+        total_candidates_estimate = 2717
+        batches_remaining = max(0, (total_candidates_estimate - next_offset) // batch_size)
+        
+        return {
+            "status": "batch_completed",
+            "batch_info": {
+                "processed": f"Candidates {start_offset + 1} - {start_offset + len(candidates)}",
+                "batch_size": batch_size,
+                "next_offset": next_offset if batches_remaining > 0 else None,
+                "estimated_batches_remaining": batches_remaining
+            },
+            "results": {
+                "candidates_processed": len(candidates),
+                "candidates_with_committees": candidates_with_committees,
+                "candidates_no_committees": candidates_no_committees,
+                "soo_links_found": soo_links_found,
+                "financial_reports_updated": financial_data_updated,
+                "api_errors": api_errors
+            },
+            "errors": errors[:3]
+        }
+        
+    except Exception as e:
+        return {"error": f"Financial collection failed: {str(e)}"}
+
 @router.get("/collect-financial-data")
 async def collect_financial_data(batch_size: int = 25, start_offset: int = 0):
     """Collect financial data in batches to avoid rate limiting"""
