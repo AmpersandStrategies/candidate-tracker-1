@@ -1535,3 +1535,222 @@ async def calculate_viability():
         
     except Exception as e:
         return {"error": f"Viability calculation failed: {str(e)}"}
+
+@router.get("/backfill-occupation-data")
+async def backfill_occupation_data(start_offset: int = 0, batch_size: int = 50):
+    """
+    Backfill occupation data for existing candidates from FEC API.
+    Processes in batches to respect API rate limits.
+    """
+    try:
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        if not fec_api_key:
+            return {"error": "FEC_API_KEY not configured"}
+        
+        # Get batch of candidates
+        candidates_result = db.supabase.table('candidates').select(
+            'candidate_id, source_candidate_ID, full_name'
+        ).range(start_offset, start_offset + batch_size - 1).execute()
+        
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {
+                "status": "completed",
+                "message": "No more candidates to process",
+                "processed": 0
+            }
+        
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for candidate in candidates:
+                try:
+                    source_id = candidate.get('source_candidate_ID')
+                    candidate_id = candidate.get('candidate_id')
+                    
+                    if not source_id:
+                        skipped_count += 1
+                        continue
+                    
+                    # Query FEC API for candidate details
+                    fec_url = f"https://api.open.fec.gov/v1/candidate/{source_id}/"
+                    params = {"api_key": fec_api_key}
+                    
+                    response = await client.get(fec_url, params=params)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        results = data.get('results', [])
+                        
+                        if results:
+                            candidate_data = results[0]
+                            occupation = candidate_data.get('candidate_occupation')
+                            
+                            if occupation:
+                                # Update candidate with occupation
+                                db.supabase.table('candidates').update({
+                                    'occupation': occupation
+                                }).eq('candidate_id', candidate_id).execute()
+                                
+                                updated_count += 1
+                            else:
+                                skipped_count += 1
+                        else:
+                            skipped_count += 1
+                    else:
+                        errors.append(f"API error for {source_id}: {response.status_code}")
+                    
+                    # Rate limiting - small delay between requests
+                    await asyncio.sleep(0.1)
+                    
+                except Exception as e:
+                    errors.append(f"Error processing {candidate.get('full_name')}: {str(e)}")
+                    continue
+        
+        next_offset = start_offset + batch_size
+        estimated_batches_remaining = max(0, (2743 - next_offset) // batch_size)
+        
+        return {
+            "status": "batch_completed",
+            "batch_info": {
+                "processed": f"Candidates {start_offset + 1} - {start_offset + len(candidates)}",
+                "batch_size": batch_size,
+                "next_offset": next_offset,
+                "estimated_batches_remaining": estimated_batches_remaining
+            },
+            "results": {
+                "candidates_processed": len(candidates),
+                "occupations_updated": updated_count,
+                "skipped": skipped_count
+            },
+            "errors": errors[:5] if errors else [],
+            "next_steps": [
+                f"Run again with start_offset={next_offset} to process next batch"
+            ] if next_offset < 2743 else [
+                "All candidates processed!",
+                "Run /calculate-viability to update scores with occupation data"
+            ]
+        }
+        
+    except Exception as e:
+        return {"error": f"Occupation backfill failed: {str(e)}"}
+
+
+# Also update the main candidate collection to include occupation
+@router.get("/collect-democratic-candidates-with-occupation")
+async def collect_democratic_candidates_with_occupation():
+    """
+    Enhanced version of candidate collection that includes occupation data.
+    Use this for future collections to automatically capture occupation.
+    """
+    try:
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        if not fec_api_key:
+            return {"error": "FEC_API_KEY not configured"}
+        
+        cycles = [2026]  # Focus on 2026 for now
+        offices = ["H", "S", "P"]
+        parties = ["DEM", "IND"]
+        
+        all_candidates = []
+        collection_summary = []
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for cycle in cycles:
+                for office in offices:
+                    for party in parties:
+                        params = {
+                            "api_key": fec_api_key,
+                            "cycle": cycle,
+                            "office": office,
+                            "party": party,
+                            "per_page": 100,
+                            "page": 1
+                        }
+                        
+                        page_candidates = []
+                        
+                        while True:
+                            response = await client.get(
+                                "https://api.open.fec.gov/v1/candidates/",
+                                params=params
+                            )
+                            
+                            if response.status_code != 200:
+                                break
+                            
+                            data = response.json()
+                            results = data.get("results", [])
+                            
+                            if not results:
+                                break
+                            
+                            page_candidates.extend(results)
+                            
+                            # Check pagination
+                            pagination = data.get("pagination", {})
+                            if params["page"] >= pagination.get("pages", 1):
+                                break
+                            
+                            params["page"] += 1
+                            await asyncio.sleep(0.2)
+                        
+                        # Store candidates with occupation data
+                        stored_count = 0
+                        for candidate in page_candidates:
+                            candidate_id = candidate.get('candidate_id')
+                            
+                            # Check if candidate already exists
+                            existing = db.supabase.table('candidates').select('candidate_id').eq(
+                                'source_candidate_ID', candidate_id
+                            ).execute()
+                            
+                            if existing.data:
+                                continue  # Skip duplicates
+                            
+                            # Extract candidate data including occupation
+                            first_name = candidate.get('name', '').split(',')[1].strip() if ',' in candidate.get('name', '') else ''
+                            last_name = candidate.get('name', '').split(',')[0].strip() if ',' in candidate.get('name', '') else candidate.get('name', '')
+                            
+                            candidate_data = {
+                                'source_candidate_ID': candidate_id,
+                                'full_name': f"{first_name} {last_name}".strip(),
+                                'first_name': first_name,
+                                'last_name': last_name,
+                                'party': party,
+                                'office': office,
+                                'jurisdiction': f"{candidate.get('state', '')} {office}",
+                                'state': candidate.get('state'),
+                                'district': candidate.get('district'),
+                                'filing_date': candidate.get('first_file_date'),
+                                'occupation': candidate.get('candidate_occupation'),  # NEW: Capture occupation
+                                'status': 'active'
+                            }
+                            
+                            result = db.supabase.table('candidates').insert(candidate_data).execute()
+                            if result.data:
+                                stored_count += 1
+                        
+                        collection_summary.append({
+                            "cycle": cycle,
+                            "office": office,
+                            "party": party,
+                            "candidates_found": len(page_candidates),
+                            "candidates_stored": stored_count
+                        })
+        
+        return {
+            "status": "success",
+            "focus": "Democratic candidates + Independents with occupation data",
+            "cycles_collected": cycles,
+            "total_candidates_found": sum(s['candidates_found'] for s in collection_summary),
+            "total_candidates_stored": sum(s['candidates_stored'] for s in collection_summary),
+            "collection_summary": collection_summary,
+            "message": f"Successfully collected candidates with occupation data"
+        }
+        
+    except Exception as e:
+        return {"error": f"Collection failed: {str(e)}"}
