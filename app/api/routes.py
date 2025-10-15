@@ -1420,12 +1420,26 @@ async def sync_to_airtable_complete():
 async def calculate_viability():
     """Calculate viability scores for all candidates based on occupation, media mentions, and office plausibility"""
     try:
-        # Get all candidates with relevant fields
-        candidates_result = db.supabase.table('candidates').select(
-            'candidate_id, source_candidate_ID, full_name, office, state, district'
-        ).execute()
+        # Get all candidates with pagination to handle large datasets
+        all_candidates = []
+        offset = 0
+        batch_size = 1000
         
-        candidates = candidates_result.data
+        while True:
+            candidates_result = db.supabase.table('candidates').select(
+                'candidate_id, source_candidate_ID, full_name, office, state, district'
+            ).range(offset, offset + batch_size - 1).execute()
+            
+            batch = candidates_result.data
+            if not batch:
+                break
+                
+            all_candidates.extend(batch)
+            offset += batch_size
+            
+            # Stop if we got fewer than batch_size (last batch)
+            if len(batch) < batch_size:
+                break
         
         scores_calculated = 0
         high_viability = 0
@@ -1433,7 +1447,7 @@ async def calculate_viability():
         low_viability = 0
         errors = []
         
-        for candidate in candidates:
+        for candidate in all_candidates:
             try:
                 candidate_id = candidate.get('candidate_id')
                 office = candidate.get('office', '').upper()
@@ -1454,14 +1468,16 @@ async def calculate_viability():
                 media_score = 0
                 
                 # OFFICE PLAUSIBILITY SCORE (0-2 points)
-                if office in ['H', 'HOUSE', 'S', 'SENATE']:
-                    # Federal legislative offices are generally plausible
+                # Match full words: House, Senate, President
+                if 'HOUSE' in office or office == 'H':
                     office_score = 2
-                elif office == 'P' or 'PRESIDENT' in office:
+                elif 'SENATE' in office or office == 'S':
+                    office_score = 2
+                elif 'PRESIDENT' in office or office == 'P':
                     # Presidential candidates get 0 by default (will need media/occupation boost)
                     office_score = 0
                 else:
-                    # State/local offices
+                    # State/local offices or unknown
                     office_score = 2
                 
                 # Calculate total score (0-10)
@@ -1496,7 +1512,7 @@ async def calculate_viability():
         
         return {
             "status": "completed",
-            "total_candidates": len(candidates),
+            "total_candidates": len(all_candidates),
             "scores_calculated": scores_calculated,
             "distribution": {
                 "high_viability": high_viability,
@@ -1504,6 +1520,11 @@ async def calculate_viability():
                 "low_viability": low_viability
             },
             "note": "Occupation and media mention scoring not yet implemented - using defaults",
+            "scoring_breakdown": {
+                "default_occupation": 1,
+                "default_media": 0,
+                "office_plausibility": "0-2 based on office type"
+            },
             "next_steps": [
                 "Add occupation field to candidates table",
                 "Implement media mention collection and counting",
