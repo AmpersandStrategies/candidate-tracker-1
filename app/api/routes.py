@@ -1422,7 +1422,7 @@ async def calculate_viability():
     try:
         # Get all candidates with relevant fields
         candidates_result = db.supabase.table('candidates').select(
-            'candidate_id, source_candidate_ID, full_name, office_sought, state, district'
+            'candidate_id, source_candidate_ID, full_name, office, state, district'
         ).execute()
         
         candidates = candidates_result.data
@@ -1436,7 +1436,7 @@ async def calculate_viability():
         for candidate in candidates:
             try:
                 candidate_id = candidate.get('candidate_id')
-                office = candidate.get('office_sought', '').upper()
+                office = candidate.get('office', '').upper()
                 
                 # Initialize score components
                 occupation_score = 0
