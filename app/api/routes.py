@@ -1415,3 +1415,102 @@ async def sync_to_airtable_complete():
         
     except Exception as e:
         return {"error": f"Sync failed: {str(e)}"}
+
+@router.get("/calculate-viability")
+async def calculate_viability():
+    """Calculate viability scores for all candidates based on occupation, media mentions, and office plausibility"""
+    try:
+        # Get all candidates with relevant fields
+        candidates_result = db.supabase.table('candidates').select(
+            'candidate_id, source_candidate_ID, full_name, office_sought, state, district'
+        ).execute()
+        
+        candidates = candidates_result.data
+        
+        scores_calculated = 0
+        high_viability = 0
+        medium_viability = 0
+        low_viability = 0
+        errors = []
+        
+        for candidate in candidates:
+            try:
+                candidate_id = candidate.get('candidate_id')
+                office = candidate.get('office_sought', '').upper()
+                
+                # Initialize score components
+                occupation_score = 0
+                media_score = 0
+                office_score = 0
+                
+                # OCCUPATION SCORE (0-3 points)
+                # For now, default to 1 (we'll enhance this when we have occupation data)
+                # TODO: Add occupation field and scoring logic
+                occupation_score = 1
+                
+                # MEDIA MENTIONS SCORE (0-5 points)
+                # TODO: Implement media mention counting when that data is available
+                # For now, default to 0
+                media_score = 0
+                
+                # OFFICE PLAUSIBILITY SCORE (0-2 points)
+                if office in ['H', 'HOUSE', 'S', 'SENATE']:
+                    # Federal legislative offices are generally plausible
+                    office_score = 2
+                elif office == 'P' or 'PRESIDENT' in office:
+                    # Presidential candidates get 0 by default (will need media/occupation boost)
+                    office_score = 0
+                else:
+                    # State/local offices
+                    office_score = 2
+                
+                # Calculate total score (0-10)
+                total_score = occupation_score + media_score + office_score
+                
+                # Determine bucket
+                if total_score >= 7:
+                    bucket = "HIGH"
+                    high_viability += 1
+                elif total_score >= 4:
+                    bucket = "MEDIUM"
+                    medium_viability += 1
+                else:
+                    bucket = "LOW"
+                    low_viability += 1
+                
+                # Update candidate record with viability data
+                update_data = {
+                    'viability_score': total_score,
+                    'viability_bucket': bucket
+                }
+                
+                db.supabase.table('candidates').update(update_data).eq(
+                    'candidate_id', candidate_id
+                ).execute()
+                
+                scores_calculated += 1
+                
+            except Exception as e:
+                errors.append(f"Error scoring {candidate.get('full_name')}: {str(e)}")
+                continue
+        
+        return {
+            "status": "completed",
+            "total_candidates": len(candidates),
+            "scores_calculated": scores_calculated,
+            "distribution": {
+                "high_viability": high_viability,
+                "medium_viability": medium_viability,
+                "low_viability": low_viability
+            },
+            "note": "Occupation and media mention scoring not yet implemented - using defaults",
+            "next_steps": [
+                "Add occupation field to candidates table",
+                "Implement media mention collection and counting",
+                "Enhance occupation scoring logic with keyword matching"
+            ],
+            "errors": errors[:10] if errors else []
+        }
+        
+    except Exception as e:
+        return {"error": f"Viability calculation failed: {str(e)}"}
