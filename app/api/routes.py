@@ -484,8 +484,8 @@ async def collect_financial_data_to_filings(batch_size: int = 25, start_offset: 
         if not api_key:
             return {"error": "FEC_API_KEY not found"}
         
-        # Get candidates in batches
-        candidates_result = db.supabase.table('candidates').select('source_candidate_ID, full_name, party').range(start_offset, start_offset + batch_size - 1).execute()
+       # Get candidates in batches
+        candidates_result = db.supabase.table('candidates').select('source_candidate_ID, full_name, party').order('candidate_id').range(start_offset, start_offset + batch_size - 1).execute()
         candidates = candidates_result.data
         
         if not candidates:
