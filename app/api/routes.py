@@ -1754,3 +1754,111 @@ async def collect_democratic_candidates_with_occupation():
         
     except Exception as e:
         return {"error": f"Collection failed: {str(e)}"}
+
+@router.get("/debug-batch-17")
+async def debug_batch_17():
+    """
+    Process batch 17 candidates ONE AT A TIME to identify which one causes the failure.
+    This will help us isolate the problematic candidate.
+    """
+    try:
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        if not fec_api_key:
+            return {"error": "FEC_API_KEY not configured"}
+        
+        # Get the exact 25 candidates from batch 17
+        candidates_result = db.supabase.table('candidates').select(
+            'candidate_id, source_candidate_ID, full_name, office, state'
+        ).range(400, 424).execute()
+        
+        candidates = candidates_result.data
+        
+        results = []
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:  # Extended timeout
+            for i, candidate in enumerate(candidates):
+                candidate_result = {
+                    "position": 400 + i,
+                    "candidate_id": candidate.get('candidate_id'),
+                    "source_id": candidate.get('source_candidate_ID'),
+                    "name": candidate.get('full_name'),
+                    "office": candidate.get('office'),
+                    "status": "pending"
+                }
+                
+                try:
+                    source_id = candidate.get('source_candidate_ID')
+                    
+                    if not source_id:
+                        candidate_result["status"] = "skipped"
+                        candidate_result["reason"] = "No source ID"
+                        results.append(candidate_result)
+                        continue
+                    
+                    # Try to fetch committee data from FEC
+                    committee_url = f"https://api.open.fec.gov/v1/candidate/{source_id}/committees/"
+                    params = {
+                        "api_key": fec_api_key,
+                        "per_page": 1
+                    }
+                    
+                    response = await client.get(committee_url, params=params, timeout=30.0)
+                    
+                    candidate_result["api_status_code"] = response.status_code
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        committees = data.get('results', [])
+                        
+                        if committees:
+                            committee = committees[0]
+                            candidate_result["status"] = "success"
+                            candidate_result["committee_id"] = committee.get('committee_id')
+                            candidate_result["committee_name"] = committee.get('name')
+                        else:
+                            candidate_result["status"] = "no_committee"
+                            candidate_result["reason"] = "No committees found"
+                    else:
+                        candidate_result["status"] = "api_error"
+                        candidate_result["reason"] = f"HTTP {response.status_code}"
+                        candidate_result["response_text"] = response.text[:200]
+                    
+                except asyncio.TimeoutError:
+                    candidate_result["status"] = "timeout"
+                    candidate_result["reason"] = "Request timed out after 30 seconds"
+                except Exception as e:
+                    candidate_result["status"] = "error"
+                    candidate_result["reason"] = str(e)
+                
+                results.append(candidate_result)
+                
+                # Small delay between requests
+                await asyncio.sleep(0.2)
+        
+        # Summarize results
+        summary = {
+            "success": len([r for r in results if r["status"] == "success"]),
+            "no_committee": len([r for r in results if r["status"] == "no_committee"]),
+            "api_error": len([r for r in results if r["status"] == "api_error"]),
+            "timeout": len([r for r in results if r["status"] == "timeout"]),
+            "error": len([r for r in results if r["status"] == "error"]),
+            "skipped": len([r for r in results if r["status"] == "skipped"])
+        }
+        
+        # Find the problematic ones
+        problems = [r for r in results if r["status"] in ["timeout", "error", "api_error"]]
+        
+        return {
+            "status": "completed",
+            "total_candidates": len(candidates),
+            "summary": summary,
+            "all_results": results,
+            "problematic_candidates": problems,
+            "next_steps": [
+                "Review problematic_candidates to see which one(s) caused issues",
+                "If specific candidates timeout/error, we can skip them in the main collection"
+            ]
+        }
+        
+    except Exception as e:
+        return {"error": f"Debug batch 17 failed: {str(e)}"}
