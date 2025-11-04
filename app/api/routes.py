@@ -21,7 +21,7 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -85,23 +85,24 @@ async def get_candidates(
         return {"error": str(e)}
 
 # ============================================================================
-# MAIN COLLECTION ENDPOINT - ONE PASS FOR EVERYTHING
+# MAIN COLLECTION ENDPOINT - COMPLETE DATA COLLECTION
 # ============================================================================
 
 @router.get("/collect-candidates")
 async def collect_candidates(
-    cycles: str = "2025,2026,2027,2028",
-    parties: str = "DEM,IND"
+    cycles: str = "2026,2028",
+    parties: str = "DEM"
 ):
     """
     Comprehensive candidate collection - gets everything in one pass:
     - Candidate basic info from FEC
-    - Committee ID and details
-    - Statement of Organization (SOO) link
+    - Committee ID and name
+    - Statement of Organization (SOO/F1) link
     - Occupation data
-    - Creates initial filing record
+    - Most recent quarterly financial report (Q3 2025 as of Oct 2025)
+    - Creates filing record with ALL financial data
     
-    This replaces all the old fragmented collection endpoints.
+    Focuses on House and Senate only (no Presidential candidates).
     """
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
@@ -110,14 +111,14 @@ async def collect_candidates(
         
         cycle_list = [int(c.strip()) for c in cycles.split(',')]
         party_list = [p.strip().upper() for p in parties.split(',')]
-        offices = ["H", "S", "P"]  # House, Senate, President
+        offices = ["H", "S"]  # House and Senate only - no Presidential
         
         total_candidates_found = 0
         total_candidates_stored = 0
         total_filings_created = 0
         collection_summary = []
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             for cycle in cycle_list:
                 for office in offices:
                     for party in party_list:
@@ -126,8 +127,9 @@ async def collect_candidates(
                             cycle_candidates_stored = 0
                             cycle_filings_created = 0
                             page = 1
+                            max_pages = 100  # Safety limit
                             
-                            while True:
+                            while page <= max_pages:
                                 # Get candidates from FEC API
                                 params = {
                                     'api_key': fec_api_key,
@@ -150,7 +152,7 @@ async def collect_candidates(
                                 candidates = data.get('results', [])
                                 
                                 if not candidates:
-                                    break
+                                    break  # No more candidates
                                 
                                 cycle_candidates_found += len(candidates)
                                 
@@ -199,7 +201,7 @@ async def collect_candidates(
                                                 committee_id = committee.get('committee_id')
                                                 committee_name = committee.get('name')
                                                 
-                                                # Get SOO link
+                                                # Get SOO (F1) link
                                                 soo_response = await client.get(
                                                     "https://api.open.fec.gov/v1/filings/",
                                                     params={
@@ -242,14 +244,55 @@ async def collect_candidates(
                                             cycle_candidates_stored += 1
                                             candidate_uuid = candidate_result.data[0]['candidate_id']
                                             
-                                            # Create initial filing record with SOO link
+                                            # Get most recent quarterly financial report
+                                            total_receipts = None
+                                            receipts_period = None
+                                            total_disbursements = None
+                                            disbursements_period = None
+                                            cash_on_hand = None
+                                            report_url = None
+                                            period_end = None
+                                            
+                                            if committee_id:
+                                                reports_response = await client.get(
+                                                    "https://api.open.fec.gov/v1/reports/",
+                                                    params={
+                                                        'api_key': fec_api_key,
+                                                        'committee_id': committee_id,
+                                                        'per_page': 1,
+                                                        'sort': '-coverage_end_date'  # Most recent first
+                                                    }
+                                                )
+                                                
+                                                if reports_response.status_code == 200:
+                                                    reports_data = reports_response.json()
+                                                    reports = reports_data.get('results', [])
+                                                    
+                                                    if reports:
+                                                        report = reports[0]
+                                                        total_receipts = report.get('total_receipts')
+                                                        receipts_period = report.get('receipts_period')  # Just that quarter
+                                                        total_disbursements = report.get('total_disbursements')
+                                                        disbursements_period = report.get('disbursements_period')  # Just that quarter
+                                                        cash_on_hand = report.get('cash_on_hand_end_period')
+                                                        report_url = report.get('pdf_url')
+                                                        period_end = report.get('coverage_end_date')
+                                            
+                                            # Create filing record with all data
                                             filing_data = {
                                                 'candidate_id': candidate_uuid,
                                                 'committee_id': committee_id,
-                                                'filing_type': 'Statement of Organization',
+                                                'filing_type': 'Quarterly Financial Report',
+                                                'committee_name': committee_name,
                                                 'statement_of_org': soo_link,
-                                                'filing_date': candidate.get('first_file_date', datetime.utcnow().strftime('%Y-%m-%d')),
-                                                'source_url': ''
+                                                'filing_date': datetime.utcnow().strftime('%Y-%m-%d'),
+                                                'period_end': period_end,
+                                                'total_receipts': total_receipts,
+                                                'receipts_period': receipts_period,
+                                                'total_disbursements': total_disbursements,
+                                                'disbursements_period': disbursements_period,
+                                                'cash_on_hand': cash_on_hand,
+                                                'source_url': report_url
                                             }
                                             
                                             filing_result = db.supabase.table('filings').insert(filing_data).execute()
@@ -257,16 +300,18 @@ async def collect_candidates(
                                                 cycle_filings_created += 1
                                         
                                         # Rate limiting
-                                        await asyncio.sleep(0.5)
+                                        await asyncio.sleep(0.3)
                                         
                                     except Exception as e:
                                         continue
                                 
-                                page += 1
-                                
-                                # Pagination safety
-                                if page > 50:
+                                # Check pagination
+                                pagination = data.get('pagination', {})
+                                if page >= pagination.get('pages', 1):
                                     break
+                                
+                                page += 1
+                                await asyncio.sleep(0.2)
                             
                             collection_summary.append({
                                 "cycle": cycle,
@@ -288,6 +333,7 @@ async def collect_candidates(
             "status": "success",
             "cycles_collected": cycle_list,
             "parties": party_list,
+            "offices": offices,
             "total_candidates_found": total_candidates_found,
             "total_candidates_stored": total_candidates_stored,
             "total_filings_created": total_filings_created,
@@ -299,7 +345,7 @@ async def collect_candidates(
         return {"error": f"Collection failed: {str(e)}"}
 
 # ============================================================================
-# FINANCIAL REPORTS COLLECTION - QUARTERLY UPDATES
+# QUARTERLY FINANCIAL REPORTS UPDATE
 # ============================================================================
 
 @router.get("/collect-financial-reports")
@@ -308,10 +354,14 @@ async def collect_financial_reports(
     start_offset: int = 0
 ):
     """
-    Collect latest financial reports for candidates who have committees.
+    Collect latest quarterly financial reports for candidates who have committees.
     Creates NEW filing records for each quarterly report (doesn't overwrite).
     
-    Run this after FEC quarterly deadlines to get updated financial data.
+    Run this after FEC quarterly deadlines:
+    - April 15 (Q1)
+    - July 15 (Q2)
+    - October 15 (Q3)
+    - January 31 (Q4)
     """
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
@@ -343,7 +393,7 @@ async def collect_financial_reports(
                     if not committee_id:
                         continue
                     
-                    # Get latest financial reports
+                    # Get latest financial report
                     reports_response = await client.get(
                         "https://api.open.fec.gov/v1/reports/",
                         params={
@@ -362,7 +412,7 @@ async def collect_financial_reports(
                             report = reports[0]
                             period_end = report.get('coverage_end_date')
                             
-                            # Check if we already have a filing for this period
+                            # Check if we already have this report
                             existing_filing = db.supabase.table('filings').select('filing_id').eq(
                                 'candidate_id', candidate_uuid
                             ).eq('period_end', period_end).execute()
@@ -370,17 +420,18 @@ async def collect_financial_reports(
                             if existing_filing.data:
                                 continue  # Already have this report
                             
-                            # Create new filing record for this report
+                            # Create new filing record for this quarterly report
                             filing_data = {
                                 'candidate_id': candidate_uuid,
                                 'committee_id': committee_id,
-                                'filing_type': 'Financial Report',
+                                'filing_type': 'Quarterly Financial Report',
                                 'filing_date': report.get('receipt_date', datetime.utcnow().strftime('%Y-%m-%d')),
                                 'period_end': period_end,
-                                'total_receipts': report.get('total_receipts', 0),
-                                'total_disbursements': report.get('total_disbursements', 0),
-                                'cash_on_hand': report.get('cash_on_hand_end_period', 0),
-                                'debts_owed': report.get('debts_owed', 0),
+                                'total_receipts': report.get('total_receipts'),
+                                'receipts_period': report.get('receipts_period'),
+                                'total_disbursements': report.get('total_disbursements'),
+                                'disbursements_period': report.get('disbursements_period'),
+                                'cash_on_hand': report.get('cash_on_hand_end_period'),
                                 'source_url': report.get('pdf_url', '')
                             }
                             
@@ -430,7 +481,7 @@ async def calculate_viability():
     
     Scoring (0-10 points):
     - Occupation: 0-3 points (higher for elected officials, lawyers, business owners)
-    - Office plausibility: 0-2 points (House/Senate = 2, President = 0)
+    - Office plausibility: 0-2 points (House/Senate = 2)
     - Media mentions: 0-5 points (when implemented)
     
     Buckets: HIGH (7+), MEDIUM (4-6), LOW (0-3)
@@ -488,12 +539,10 @@ async def calculate_viability():
                     office_score = 2
                 elif 'SENATE' in office or office == 'S':
                     office_score = 2
-                elif 'PRESIDENT' in office or office == 'P':
-                    office_score = 0  # Need strong occupation/media to be viable
                 else:
                     office_score = 2  # State/local offices
                 
-                # MEDIA SCORE (0-5 points) - placeholder for future implementation
+                # MEDIA SCORE (0-5 points) - placeholder
                 media_score = 0
                 
                 # Calculate total
@@ -642,7 +691,6 @@ async def sync_to_airtable():
                 data = response.json()
                 for record in data.get('records', []):
                     fields = record.get('fields', {})
-                    # Create unique identifier: candidate_source_id + period_end
                     candidate_link = fields.get('Candidate', [])
                     period_end = fields.get('Period End', '')
                     if candidate_link and period_end:
@@ -713,7 +761,7 @@ async def sync_to_airtable():
                 
                 await asyncio.sleep(0.2)
         
-        # Now sync filings - get all filings from Supabase
+        # Now sync filings
         all_filings = []
         offset = 0
         
@@ -769,10 +817,12 @@ async def sync_to_airtable():
                             "Filing Date": str(filing.get('filing_date', '')),
                             "Period End": str(filing.get('period_end', '')),
                             "Committee ID": str(filing.get('committee_id', '')),
-                            "Total Receipts": float(filing.get('total_receipts', 0)),
-                            "Total Disbursements": float(filing.get('total_disbursements', 0)),
-                            "Cash on Hand": float(filing.get('cash_on_hand', 0)),
-                            "Debts Owed": float(filing.get('debts_owed', 0)),
+                            "Committee Name": str(filing.get('committee_name', '')),
+                            "Total Receipts": float(filing.get('total_receipts', 0)) if filing.get('total_receipts') else 0,
+                            "Receipts Period": float(filing.get('receipts_period', 0)) if filing.get('receipts_period') else 0,
+                            "Total Disbursements": float(filing.get('total_disbursements', 0)) if filing.get('total_disbursements') else 0,
+                            "Disbursements Period": float(filing.get('disbursements_period', 0)) if filing.get('disbursements_period') else 0,
+                            "Cash on Hand": float(filing.get('cash_on_hand', 0)) if filing.get('cash_on_hand') else 0,
                             "SOO Link": str(filing.get('statement_of_org', '')),
                             "Report Link": str(filing.get('source_url', ''))
                         }
