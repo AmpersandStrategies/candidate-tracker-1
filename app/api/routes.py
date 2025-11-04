@@ -1,6 +1,6 @@
 """
 FastAPI Routes - Candidate Tracker
-Clean, consolidated endpoints for reliable data collection
+Reliable two-step collection: candidates first, financial data second
 """
 from fastapi import APIRouter, Query
 from typing import Optional
@@ -21,7 +21,7 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -85,7 +85,7 @@ async def get_candidates(
         return {"error": str(e)}
 
 # ============================================================================
-# MAIN COLLECTION ENDPOINT - COMPLETE DATA COLLECTION
+# STEP 1: COLLECT CANDIDATES ONLY (FAST, NO RATE LIMITS)
 # ============================================================================
 
 @router.get("/collect-candidates")
@@ -94,15 +94,13 @@ async def collect_candidates(
     parties: str = "DEM"
 ):
     """
-    Comprehensive candidate collection - gets everything in one pass:
-    - Candidate basic info from FEC
-    - Committee ID and name
-    - Statement of Organization (SOO/F1) link
-    - Occupation data
-    - Most recent quarterly financial report (Q3 2025 as of Oct 2025)
-    - Creates filing record with ALL financial data
+    Step 1: Collect candidate basic info ONLY from FEC.
+    Fast collection with minimal API calls - no rate limit issues.
     
-    Focuses on House and Senate only (no Presidential candidates).
+    Gets: name, party, office, state, district, occupation, status
+    Does NOT get: committees, financial data (that's step 2)
+    
+    Focus: House and Senate Democrats for 2026 & 2028 cycles.
     """
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
@@ -111,11 +109,10 @@ async def collect_candidates(
         
         cycle_list = [int(c.strip()) for c in cycles.split(',')]
         party_list = [p.strip().upper() for p in parties.split(',')]
-        offices = ["H", "S"]  # House and Senate only - no Presidential
+        offices = ["H", "S"]  # House and Senate only
         
         total_candidates_found = 0
         total_candidates_stored = 0
-        total_filings_created = 0
         collection_summary = []
         
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -125,12 +122,11 @@ async def collect_candidates(
                         try:
                             cycle_candidates_found = 0
                             cycle_candidates_stored = 0
-                            cycle_filings_created = 0
                             page = 1
-                            max_pages = 100  # Safety limit
+                            max_pages = 100
+                            empty_results_count = 0
                             
                             while page <= max_pages:
-                                # Get candidates from FEC API
                                 params = {
                                     'api_key': fec_api_key,
                                     'cycle': cycle,
@@ -145,6 +141,14 @@ async def collect_candidates(
                                     params=params
                                 )
                                 
+                                # Handle rate limiting
+                                if response.status_code == 429:
+                                    await asyncio.sleep(60)  # Wait 1 minute
+                                    response = await client.get(
+                                        "https://api.open.fec.gov/v1/candidates/",
+                                        params=params
+                                    )
+                                
                                 if response.status_code != 200:
                                     break
                                 
@@ -152,11 +156,16 @@ async def collect_candidates(
                                 candidates = data.get('results', [])
                                 
                                 if not candidates:
-                                    break  # No more candidates
+                                    empty_results_count += 1
+                                    if empty_results_count >= 2:
+                                        break  # Two empty pages in a row = truly done
+                                    page += 1
+                                    continue
                                 
+                                empty_results_count = 0  # Reset counter
                                 cycle_candidates_found += len(candidates)
                                 
-                                # Process each candidate
+                                # Process each candidate - BASIC INFO ONLY
                                 for candidate in candidates:
                                     try:
                                         source_candidate_id = candidate.get('candidate_id')
@@ -178,47 +187,7 @@ async def collect_candidates(
                                             first_name = ''
                                             last_name = full_name
                                         
-                                        # Get committee info
-                                        committee_id = None
-                                        committee_name = None
-                                        soo_link = None
-                                        
-                                        committees_response = await client.get(
-                                            "https://api.open.fec.gov/v1/committees/",
-                                            params={
-                                                'api_key': fec_api_key,
-                                                'candidate_id': source_candidate_id,
-                                                'per_page': 10
-                                            }
-                                        )
-                                        
-                                        if committees_response.status_code == 200:
-                                            committees_data = committees_response.json()
-                                            committees = committees_data.get('results', [])
-                                            
-                                            if committees:
-                                                committee = committees[0]
-                                                committee_id = committee.get('committee_id')
-                                                committee_name = committee.get('name')
-                                                
-                                                # Get SOO (F1) link
-                                                soo_response = await client.get(
-                                                    "https://api.open.fec.gov/v1/filings/",
-                                                    params={
-                                                        'api_key': fec_api_key,
-                                                        'committee_id': committee_id,
-                                                        'form_type': 'F1',
-                                                        'per_page': 1
-                                                    }
-                                                )
-                                                
-                                                if soo_response.status_code == 200:
-                                                    soo_data = soo_response.json()
-                                                    soo_filings = soo_data.get('results', [])
-                                                    if soo_filings and soo_filings[0].get('pdf_url'):
-                                                        soo_link = soo_filings[0]['pdf_url']
-                                        
-                                        # Create candidate record
+                                        # Create candidate record - BASIC INFO ONLY
                                         candidate_data = {
                                             'source_candidate_ID': source_candidate_id,
                                             'full_name': f"{first_name} {last_name}".strip(),
@@ -232,117 +201,272 @@ async def collect_candidates(
                                             'incumbent': candidate.get('incumbent_challenger') == 'I',
                                             'status': candidate.get('candidate_status', 'Active'),
                                             'occupation': candidate.get('candidate_occupation'),
-                                            'committee_id': committee_id,
                                             'jurisdiction_name': f"{candidate.get('state', 'Unknown')} {office}",
                                             'source_system': 'FEC',
                                             'updated_at': datetime.utcnow().isoformat()
                                         }
                                         
-                                        candidate_result = db.supabase.table('candidates').insert(candidate_data).execute()
-                                        
-                                        if candidate_result.data:
+                                        result = db.supabase.table('candidates').insert(candidate_data).execute()
+                                        if result.data:
                                             cycle_candidates_stored += 1
-                                            candidate_uuid = candidate_result.data[0]['candidate_id']
-                                            
-                                            # Get most recent quarterly financial report
-                                            total_receipts = None
-                                            receipts_period = None
-                                            total_disbursements = None
-                                            disbursements_period = None
-                                            cash_on_hand = None
-                                            report_url = None
-                                            period_end = None
-                                            
-                                            if committee_id:
-                                                reports_response = await client.get(
-                                                    "https://api.open.fec.gov/v1/reports/",
-                                                    params={
-                                                        'api_key': fec_api_key,
-                                                        'committee_id': committee_id,
-                                                        'per_page': 1,
-                                                        'sort': '-coverage_end_date'  # Most recent first
-                                                    }
-                                                )
-                                                
-                                                if reports_response.status_code == 200:
-                                                    reports_data = reports_response.json()
-                                                    reports = reports_data.get('results', [])
-                                                    
-                                                    if reports:
-                                                        report = reports[0]
-                                                        total_receipts = report.get('total_receipts')
-                                                        receipts_period = report.get('receipts_period')  # Just that quarter
-                                                        total_disbursements = report.get('total_disbursements')
-                                                        disbursements_period = report.get('disbursements_period')  # Just that quarter
-                                                        cash_on_hand = report.get('cash_on_hand_end_period')
-                                                        report_url = report.get('pdf_url')
-                                                        period_end = report.get('coverage_end_date')
-                                            
-                                            # Create filing record with all data
-                                            filing_data = {
-                                                'candidate_id': candidate_uuid,
-                                                'committee_id': committee_id,
-                                                'filing_type': 'Quarterly Financial Report',
-                                                'committee_name': committee_name,
-                                                'statement_of_org': soo_link,
-                                                'filing_date': datetime.utcnow().strftime('%Y-%m-%d'),
-                                                'period_end': period_end,
-                                                'total_receipts': total_receipts,
-                                                'receipts_period': receipts_period,
-                                                'total_disbursements': total_disbursements,
-                                                'disbursements_period': disbursements_period,
-                                                'cash_on_hand': cash_on_hand,
-                                                'source_url': report_url
-                                            }
-                                            
-                                            filing_result = db.supabase.table('filings').insert(filing_data).execute()
-                                            if filing_result.data:
-                                                cycle_filings_created += 1
-                                        
-                                        # Rate limiting
-                                        await asyncio.sleep(0.3)
                                         
                                     except Exception as e:
                                         continue
                                 
-                                # Check pagination
-                                pagination = data.get('pagination', {})
-                                if page >= pagination.get('pages', 1):
-                                    break
-                                
                                 page += 1
-                                await asyncio.sleep(0.2)
+                                await asyncio.sleep(0.5)  # Small delay between pages
                             
                             collection_summary.append({
                                 "cycle": cycle,
                                 "office": office,
                                 "party": party,
                                 "candidates_found": cycle_candidates_found,
-                                "candidates_stored": cycle_candidates_stored,
-                                "filings_created": cycle_filings_created
+                                "candidates_stored": cycle_candidates_stored
                             })
                             
                             total_candidates_found += cycle_candidates_found
                             total_candidates_stored += cycle_candidates_stored
-                            total_filings_created += cycle_filings_created
                             
                         except Exception as e:
                             continue
         
         return {
             "status": "success",
+            "step": "1 of 2 - Basic candidate data collected",
             "cycles_collected": cycle_list,
             "parties": party_list,
             "offices": offices,
             "total_candidates_found": total_candidates_found,
             "total_candidates_stored": total_candidates_stored,
-            "total_filings_created": total_filings_created,
             "collection_summary": collection_summary,
-            "message": f"Successfully collected {total_candidates_stored} candidates with {total_filings_created} filing records"
+            "message": f"Successfully collected {total_candidates_stored} candidates",
+            "next_step": "Run /enrich-financial-data to add committee and financial information"
         }
         
     except Exception as e:
         return {"error": f"Collection failed: {str(e)}"}
+
+# ============================================================================
+# STEP 2: ENRICH WITH FINANCIAL DATA (BATCHED, RATE-LIMITED)
+# ============================================================================
+
+@router.get("/enrich-financial-data")
+async def enrich_financial_data(
+    batch_size: int = 25,
+    start_offset: int = 0
+):
+    """
+    Step 2: Enrich candidates with committee and financial data.
+    Processes in small batches with proper rate limiting to avoid 429 errors.
+    
+    For each candidate, gets:
+    - Committee ID and name
+    - SOO (F1) link
+    - Most recent quarterly financial report
+    - Creates filing record with all data
+    
+    Run repeatedly with increasing start_offset until all candidates processed.
+    """
+    try:
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        if not fec_api_key:
+            return {"error": "FEC_API_KEY not found"}
+        
+        # Get candidates without committee data
+        candidates_result = db.supabase.table('candidates').select(
+            'candidate_id, source_candidate_ID, full_name'
+        ).is_('committee_id', 'null').order('candidate_id').range(
+            start_offset, start_offset + batch_size - 1
+        ).execute()
+        
+        candidates = candidates_result.data
+        
+        if not candidates:
+            return {
+                "status": "completed",
+                "message": "All candidates have been enriched with financial data"
+            }
+        
+        enriched_count = 0
+        no_committee_count = 0
+        filings_created = 0
+        errors = []
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for candidate in candidates:
+                try:
+                    source_candidate_id = candidate.get('source_candidate_ID')
+                    candidate_uuid = candidate.get('candidate_id')
+                    candidate_name = candidate.get('full_name')
+                    
+                    # Get committee info with retry on 429
+                    committee_id = None
+                    committee_name = None
+                    soo_link = None
+                    
+                    for attempt in range(3):
+                        committees_response = await client.get(
+                            "https://api.open.fec.gov/v1/committees/",
+                            params={
+                                'api_key': fec_api_key,
+                                'candidate_id': source_candidate_id,
+                                'per_page': 10
+                            }
+                        )
+                        
+                        if committees_response.status_code == 429:
+                            await asyncio.sleep(60)  # Wait 1 minute on rate limit
+                            continue
+                        
+                        if committees_response.status_code == 200:
+                            committees_data = committees_response.json()
+                            committees = committees_data.get('results', [])
+                            
+                            if committees:
+                                committee = committees[0]
+                                committee_id = committee.get('committee_id')
+                                committee_name = committee.get('name')
+                                
+                                # Get SOO (F1) link with retry
+                                for soo_attempt in range(2):
+                                    soo_response = await client.get(
+                                        "https://api.open.fec.gov/v1/filings/",
+                                        params={
+                                            'api_key': fec_api_key,
+                                            'committee_id': committee_id,
+                                            'form_type': 'F1',
+                                            'per_page': 1
+                                        }
+                                    )
+                                    
+                                    if soo_response.status_code == 429:
+                                        await asyncio.sleep(30)
+                                        continue
+                                    
+                                    if soo_response.status_code == 200:
+                                        soo_data = soo_response.json()
+                                        soo_filings = soo_data.get('results', [])
+                                        if soo_filings and soo_filings[0].get('pdf_url'):
+                                            soo_link = soo_filings[0]['pdf_url']
+                                    break
+                            break
+                        
+                        if attempt == 2:  # Last attempt
+                            break
+                    
+                    if not committee_id:
+                        no_committee_count += 1
+                        # Update candidate to mark as processed even without committee
+                        db.supabase.table('candidates').update({
+                            'committee_id': 'NONE'
+                        }).eq('candidate_id', candidate_uuid).execute()
+                        await asyncio.sleep(2)
+                        continue
+                    
+                    # Update candidate with committee info
+                    db.supabase.table('candidates').update({
+                        'committee_id': committee_id
+                    }).eq('candidate_id', candidate_uuid).execute()
+                    
+                    # Get most recent quarterly financial report with retry
+                    total_receipts = None
+                    receipts_period = None
+                    total_disbursements = None
+                    disbursements_period = None
+                    cash_on_hand = None
+                    report_url = None
+                    period_end = None
+                    
+                    for report_attempt in range(2):
+                        reports_response = await client.get(
+                            "https://api.open.fec.gov/v1/reports/",
+                            params={
+                                'api_key': fec_api_key,
+                                'committee_id': committee_id,
+                                'per_page': 1,
+                                'sort': '-coverage_end_date'
+                            }
+                        )
+                        
+                        if reports_response.status_code == 429:
+                            await asyncio.sleep(30)
+                            continue
+                        
+                        if reports_response.status_code == 200:
+                            reports_data = reports_response.json()
+                            reports = reports_data.get('results', [])
+                            
+                            if reports:
+                                report = reports[0]
+                                total_receipts = report.get('total_receipts')
+                                receipts_period = report.get('receipts_period')
+                                total_disbursements = report.get('total_disbursements')
+                                disbursements_period = report.get('disbursements_period')
+                                cash_on_hand = report.get('cash_on_hand_end_period')
+                                report_url = report.get('pdf_url')
+                                period_end = report.get('coverage_end_date')
+                        break
+                    
+                    # Create filing record
+                    filing_data = {
+                        'candidate_id': candidate_uuid,
+                        'committee_id': committee_id,
+                        'committee_name': committee_name,
+                        'filing_type': 'Quarterly Financial Report',
+                        'statement_of_org': soo_link,
+                        'filing_date': datetime.utcnow().strftime('%Y-%m-%d'),
+                        'period_end': period_end,
+                        'total_receipts': total_receipts,
+                        'receipts_period': receipts_period,
+                        'total_disbursements': total_disbursements,
+                        'disbursements_period': disbursements_period,
+                        'cash_on_hand': cash_on_hand,
+                        'source_url': report_url
+                    }
+                    
+                    result = db.supabase.table('filings').insert(filing_data).execute()
+                    if result.data:
+                        filings_created += 1
+                    
+                    enriched_count += 1
+                    
+                    # Rate limiting - 3 seconds between candidates
+                    await asyncio.sleep(3)
+                    
+                except Exception as e:
+                    errors.append(f"Error processing {candidate_name}: {str(e)}")
+                    continue
+        
+        next_offset = start_offset + batch_size
+        
+        # Estimate remaining candidates
+        total_candidates_result = db.supabase.table('candidates').select(
+            'candidate_id', count='exact'
+        ).is_('committee_id', 'null').execute()
+        remaining = total_candidates_result.count
+        
+        return {
+            "status": "batch_completed",
+            "batch_info": {
+                "processed": f"Candidates {start_offset + 1} - {start_offset + len(candidates)}",
+                "batch_size": batch_size,
+                "next_offset": next_offset,
+                "estimated_remaining": remaining
+            },
+            "results": {
+                "candidates_processed": len(candidates),
+                "enriched_with_committee": enriched_count,
+                "no_committee_found": no_committee_count,
+                "filings_created": filings_created
+            },
+            "errors": errors[:5] if errors else [],
+            "next_steps": [
+                f"Run again with start_offset={next_offset} to continue" if remaining > 0 else "All candidates enriched! Run /calculate-viability next"
+            ]
+        }
+        
+    except Exception as e:
+        return {"error": f"Enrichment failed: {str(e)}"}
 
 # ============================================================================
 # QUARTERLY FINANCIAL REPORTS UPDATE
@@ -350,18 +474,14 @@ async def collect_candidates(
 
 @router.get("/collect-financial-reports")
 async def collect_financial_reports(
-    batch_size: int = 50,
+    batch_size: int = 25,
     start_offset: int = 0
 ):
     """
-    Collect latest quarterly financial reports for candidates who have committees.
-    Creates NEW filing records for each quarterly report (doesn't overwrite).
+    Collect NEW quarterly financial reports for candidates who already have committees.
+    Creates NEW filing records (doesn't overwrite existing ones).
     
-    Run this after FEC quarterly deadlines:
-    - April 15 (Q1)
-    - July 15 (Q2)
-    - October 15 (Q3)
-    - January 31 (Q4)
+    Run after FEC quarterly deadlines: April 15, July 15, October 15, January 31
     """
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
@@ -371,7 +491,7 @@ async def collect_financial_reports(
         # Get candidates with committees
         candidates_result = db.supabase.table('candidates').select(
             'candidate_id, source_candidate_ID, full_name, committee_id'
-        ).not_.is_('committee_id', 'null').order('candidate_id').range(
+        ).not_.is_('committee_id', 'null').neq('committee_id', 'NONE').order('candidate_id').range(
             start_offset, start_offset + batch_size - 1
         ).execute()
         
@@ -381,7 +501,7 @@ async def collect_financial_reports(
             return {"status": "completed", "message": "No more candidates to process"}
         
         reports_created = 0
-        no_reports_found = 0
+        no_new_reports = 0
         errors = []
         
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -390,59 +510,61 @@ async def collect_financial_reports(
                     committee_id = candidate.get('committee_id')
                     candidate_uuid = candidate.get('candidate_id')
                     
-                    if not committee_id:
-                        continue
-                    
-                    # Get latest financial report
-                    reports_response = await client.get(
-                        "https://api.open.fec.gov/v1/reports/",
-                        params={
-                            'api_key': fec_api_key,
-                            'committee_id': committee_id,
-                            'per_page': 1,
-                            'sort': '-coverage_end_date'
-                        }
-                    )
-                    
-                    if reports_response.status_code == 200:
-                        reports_data = reports_response.json()
-                        reports = reports_data.get('results', [])
-                        
-                        if reports:
-                            report = reports[0]
-                            period_end = report.get('coverage_end_date')
-                            
-                            # Check if we already have this report
-                            existing_filing = db.supabase.table('filings').select('filing_id').eq(
-                                'candidate_id', candidate_uuid
-                            ).eq('period_end', period_end).execute()
-                            
-                            if existing_filing.data:
-                                continue  # Already have this report
-                            
-                            # Create new filing record for this quarterly report
-                            filing_data = {
-                                'candidate_id': candidate_uuid,
+                    # Get latest financial report with retry
+                    for attempt in range(2):
+                        reports_response = await client.get(
+                            "https://api.open.fec.gov/v1/reports/",
+                            params={
+                                'api_key': fec_api_key,
                                 'committee_id': committee_id,
-                                'filing_type': 'Quarterly Financial Report',
-                                'filing_date': report.get('receipt_date', datetime.utcnow().strftime('%Y-%m-%d')),
-                                'period_end': period_end,
-                                'total_receipts': report.get('total_receipts'),
-                                'receipts_period': report.get('receipts_period'),
-                                'total_disbursements': report.get('total_disbursements'),
-                                'disbursements_period': report.get('disbursements_period'),
-                                'cash_on_hand': report.get('cash_on_hand_end_period'),
-                                'source_url': report.get('pdf_url', '')
+                                'per_page': 1,
+                                'sort': '-coverage_end_date'
                             }
+                        )
+                        
+                        if reports_response.status_code == 429:
+                            await asyncio.sleep(60)
+                            continue
+                        
+                        if reports_response.status_code == 200:
+                            reports_data = reports_response.json()
+                            reports = reports_data.get('results', [])
                             
-                            result = db.supabase.table('filings').insert(filing_data).execute()
-                            if result.data:
-                                reports_created += 1
-                        else:
-                            no_reports_found += 1
+                            if reports:
+                                report = reports[0]
+                                period_end = report.get('coverage_end_date')
+                                
+                                # Check if we already have this report
+                                existing_filing = db.supabase.table('filings').select('filing_id').eq(
+                                    'candidate_id', candidate_uuid
+                                ).eq('period_end', period_end).execute()
+                                
+                                if not existing_filing.data:
+                                    # Create new filing record
+                                    filing_data = {
+                                        'candidate_id': candidate_uuid,
+                                        'committee_id': committee_id,
+                                        'filing_type': 'Quarterly Financial Report',
+                                        'filing_date': report.get('receipt_date', datetime.utcnow().strftime('%Y-%m-%d')),
+                                        'period_end': period_end,
+                                        'total_receipts': report.get('total_receipts'),
+                                        'receipts_period': report.get('receipts_period'),
+                                        'total_disbursements': report.get('total_disbursements'),
+                                        'disbursements_period': report.get('disbursements_period'),
+                                        'cash_on_hand': report.get('cash_on_hand_end_period'),
+                                        'source_url': report.get('pdf_url', '')
+                                    }
+                                    
+                                    result = db.supabase.table('filings').insert(filing_data).execute()
+                                    if result.data:
+                                        reports_created += 1
+                                else:
+                                    no_new_reports += 1
+                            else:
+                                no_new_reports += 1
+                        break
                     
-                    # Rate limiting
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(3)
                     
                 except Exception as e:
                     errors.append(f"Error processing {candidate.get('full_name')}: {str(e)}")
@@ -459,16 +581,13 @@ async def collect_financial_reports(
             "results": {
                 "candidates_processed": len(candidates),
                 "new_reports_created": reports_created,
-                "no_reports_found": no_reports_found
+                "no_new_reports": no_new_reports
             },
-            "errors": errors[:5] if errors else [],
-            "next_steps": [
-                f"Run again with start_offset={next_offset} to continue" if len(candidates) == batch_size else "All candidates processed"
-            ]
+            "errors": errors[:5] if errors else []
         }
         
     except Exception as e:
-        return {"error": f"Financial report collection failed: {str(e)}"}
+        return {"error": f"Report collection failed: {str(e)}"}
 
 # ============================================================================
 # VIABILITY SCORING
@@ -540,7 +659,7 @@ async def calculate_viability():
                 elif 'SENATE' in office or office == 'S':
                     office_score = 2
                 else:
-                    office_score = 2  # State/local offices
+                    office_score = 2
                 
                 # MEDIA SCORE (0-5 points) - placeholder
                 media_score = 0
@@ -578,11 +697,6 @@ async def calculate_viability():
                 "high_viability": high_viability,
                 "medium_viability": medium_viability,
                 "low_viability": low_viability
-            },
-            "scoring_breakdown": {
-                "occupation": "0-3 points based on keywords",
-                "office": "0-2 points based on office type",
-                "media": "0-5 points (not yet implemented)"
             }
         }
         
@@ -595,14 +709,7 @@ async def calculate_viability():
 
 @router.get("/sync-to-airtable")
 async def sync_to_airtable():
-    """
-    Sync candidates and filings from Supabase to Airtable.
-    Run this after collecting candidates or financial reports.
-    
-    Creates proper linked records:
-    - Candidates table gets candidate info
-    - Filings & Finance table gets filing records linked to candidates
-    """
+    """Sync candidates and filings from Supabase to Airtable"""
     try:
         airtable_token = os.environ.get('AIRTABLE_TOKEN')
         airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
@@ -611,7 +718,6 @@ async def sync_to_airtable():
             return {"error": "Missing Airtable credentials"}
         
         def map_party(party_code):
-            """Map FEC party codes to Airtable values"""
             if not party_code:
                 return "Other"
             party_upper = str(party_code).upper().strip()
@@ -624,7 +730,7 @@ async def sync_to_airtable():
             else:
                 return "Other"
         
-        # Get all candidates from Supabase
+        # Get all candidates
         all_candidates = []
         offset = 0
         batch_size = 1000
@@ -644,7 +750,6 @@ async def sync_to_airtable():
             if len(batch) < batch_size:
                 break
         
-        # Get existing Airtable candidates to avoid duplicates
         candidates_url = f"https://api.airtable.com/v0/{airtable_base_id}/Candidates"
         filings_url = f"https://api.airtable.com/v0/{airtable_base_id}/Filings%20%26%20Finance"
         headers = {
@@ -652,8 +757,8 @@ async def sync_to_airtable():
             "Content-Type": "application/json"
         }
         
-        existing_candidates = {}  # source_candidate_ID -> airtable_record_id
-        existing_filings = set()  # Set of filing identifiers
+        existing_candidates = {}
+        existing_filings = set()
         
         async with httpx.AsyncClient() as client:
             # Get existing candidates
@@ -704,7 +809,7 @@ async def sync_to_airtable():
         filings_synced = 0
         errors = []
         
-        # Sync candidates in batches of 10 (Airtable limit)
+        # Sync candidates
         async with httpx.AsyncClient() as client:
             for i in range(0, len(all_candidates), 10):
                 candidate_batch = all_candidates[i:i+10]
@@ -713,7 +818,6 @@ async def sync_to_airtable():
                 for candidate in candidate_batch:
                     source_id = candidate.get('source_candidate_ID')
                     
-                    # Skip if already exists
                     if source_id in existing_candidates:
                         continue
                     
@@ -734,7 +838,6 @@ async def sync_to_airtable():
                     }
                     candidate_records.append(candidate_record)
                 
-                # Create candidate records
                 if candidate_records:
                     try:
                         response = await client.post(
@@ -748,7 +851,6 @@ async def sync_to_airtable():
                             created_records = response_data.get('records', [])
                             candidates_synced += len(created_records)
                             
-                            # Update existing_candidates map
                             for record in created_records:
                                 source_id = record.get('fields', {}).get('Source Candidate ID')
                                 if source_id:
@@ -761,7 +863,7 @@ async def sync_to_airtable():
                 
                 await asyncio.sleep(0.2)
         
-        # Now sync filings
+        # Sync filings
         all_filings = []
         offset = 0
         
@@ -780,7 +882,6 @@ async def sync_to_airtable():
             if len(batch) < batch_size:
                 break
         
-        # Sync filings in batches
         async with httpx.AsyncClient() as client:
             for i in range(0, len(all_filings), 10):
                 filing_batch = all_filings[i:i+10]
@@ -789,7 +890,6 @@ async def sync_to_airtable():
                 for filing in filing_batch:
                     candidate_uuid = filing.get('candidate_id')
                     
-                    # Find the candidate's source_candidate_ID and Airtable record ID
                     candidate_result = db.supabase.table('candidates').select(
                         'source_candidate_ID'
                     ).eq('candidate_id', candidate_uuid).execute()
@@ -801,9 +901,8 @@ async def sync_to_airtable():
                     airtable_candidate_id = existing_candidates.get(source_id)
                     
                     if not airtable_candidate_id:
-                        continue  # Candidate not in Airtable yet
+                        continue
                     
-                    # Check if filing already exists
                     period_end = filing.get('period_end', '')
                     filing_identifier = f"{airtable_candidate_id}_{period_end}"
                     
@@ -829,7 +928,6 @@ async def sync_to_airtable():
                     }
                     filing_records.append(filing_record)
                 
-                # Create filing records
                 if filing_records:
                     try:
                         response = await client.post(
@@ -853,7 +951,6 @@ async def sync_to_airtable():
             "status": "completed",
             "candidates": {
                 "total_in_supabase": len(all_candidates),
-                "already_in_airtable": len(existing_candidates) - candidates_synced,
                 "newly_synced": candidates_synced
             },
             "filings": {
@@ -872,19 +969,14 @@ async def sync_to_airtable():
 
 @router.get("/debug-candidate")
 async def debug_candidate(candidate_id: str):
-    """
-    Debug a single candidate - test FEC API calls and data retrieval.
-    Use either source_candidate_ID (FEC ID) or candidate_id (UUID).
-    """
+    """Debug a single candidate"""
     try:
         fec_api_key = os.environ.get('FEC_API_KEY')
         if not fec_api_key:
             return {"error": "FEC_API_KEY not found"}
         
-        # Try to find candidate
         candidate = None
         
-        # Try as source_candidate_ID first
         result = db.supabase.table('candidates').select('*').eq(
             'source_candidate_ID', candidate_id
         ).execute()
@@ -892,7 +984,6 @@ async def debug_candidate(candidate_id: str):
         if result.data:
             candidate = result.data[0]
         else:
-            # Try as UUID
             result = db.supabase.table('candidates').select('*').eq(
                 'candidate_id', candidate_id
             ).execute()
@@ -909,7 +1000,6 @@ async def debug_candidate(candidate_id: str):
         }
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Test committee lookup
             committees_response = await client.get(
                 "https://api.open.fec.gov/v1/committees/",
                 params={
@@ -923,43 +1013,6 @@ async def debug_candidate(candidate_id: str):
                 "status_code": committees_response.status_code,
                 "data": committees_response.json() if committees_response.status_code == 200 else None
             }
-            
-            # Test SOO lookup
-            if committees_response.status_code == 200:
-                committees = committees_response.json().get('results', [])
-                if committees:
-                    committee_id = committees[0].get('committee_id')
-                    
-                    soo_response = await client.get(
-                        "https://api.open.fec.gov/v1/filings/",
-                        params={
-                            'api_key': fec_api_key,
-                            'committee_id': committee_id,
-                            'form_type': 'F1',
-                            'per_page': 1
-                        }
-                    )
-                    
-                    debug_info["fec_data"]["soo"] = {
-                        "status_code": soo_response.status_code,
-                        "data": soo_response.json() if soo_response.status_code == 200 else None
-                    }
-                    
-                    # Test financial reports
-                    reports_response = await client.get(
-                        "https://api.open.fec.gov/v1/reports/",
-                        params={
-                            'api_key': fec_api_key,
-                            'committee_id': committee_id,
-                            'per_page': 3,
-                            'sort': '-coverage_end_date'
-                        }
-                    )
-                    
-                    debug_info["fec_data"]["reports"] = {
-                        "status_code": reports_response.status_code,
-                        "data": reports_response.json() if reports_response.status_code == 200 else None
-                    }
         
         return debug_info
         
