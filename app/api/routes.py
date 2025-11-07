@@ -315,7 +315,7 @@ async def enrich_financial_data(
                 enriched_count += 1
                 
                 # Get financial reports
-                reports_url = f"https://api.open.fec.gov/v1/reports/{committee_id}/?api_key={api_key}&sort=-coverage_end_date&per_page=1"
+                reports_url = f"https://api.open.fec.gov/v1/committee/{committee_id}/reports/?api_key={api_key}&sort=-coverage_end_date&per_page=1"
                 
                 # Handle 429 rate limits
                 for attempt in range(max_retries):
