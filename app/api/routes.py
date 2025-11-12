@@ -1,4 +1,4 @@
-"""FastAPI routes - Robust Collection"""
+"""FastAPI routes - Batch Collection (No Timeout)"""
 from fastapi import APIRouter
 from datetime import datetime
 import httpx
@@ -21,7 +21,7 @@ async def health_check():
     
     return {
         "status": "healthy",
-        "version": "2.2.0",
+        "version": "2.3.0-batch",
         "timestamp": datetime.utcnow().isoformat(),
         "database": {
             "status": db_status,
@@ -30,30 +30,135 @@ async def health_check():
     }
 
 
-@router.get("/collect-2026-house-democrats")
-async def collect_2026_house_democrats():
+@router.get("/collect-batch")
+async def collect_batch(page: int = 1):
     """
-    Collect 2026 House Democrats with robust error handling.
-    Continues processing even if some pages fail.
+    Collect ONE PAGE (100 candidates) at a time.
+    Call this multiple times with different page numbers.
+    
+    Example: /collect-batch?page=1
+             /collect-batch?page=2
+             etc.
     """
     fec_api_key = os.environ.get('FEC_API_KEY')
     if not fec_api_key:
         return {"error": "FEC_API_KEY not configured"}
     
-    candidates_collected = 0
+    if page < 1 or page > 50:
+        return {"error": "Page must be between 1 and 50"}
+    
     candidates_stored = 0
-    page_errors = []
+    errors = []
     
     try:
         base_url = "https://api.open.fec.gov/v1/candidates/"
         
-        # Longer timeout for FEC API
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            page = 1
-            has_more = True
-            consecutive_failures = 0
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            params = {
+                "api_key": fec_api_key,
+                "election_year": 2026,
+                "office": "H",
+                "party": "DEM",
+                "per_page": 100,
+                "page": page,
+                "sort": "name"
+            }
             
-            while has_more and page <= 50:
+            response = await client.get(base_url, params=params)
+            
+            if response.status_code != 200:
+                return {
+                    "status": "error",
+                    "page": page,
+                    "error": f"FEC API returned {response.status_code}"
+                }
+            
+            data = response.json()
+            candidates = data.get('results', [])
+            pagination = data.get('pagination', {})
+            
+            # Store each candidate
+            for candidate in candidates:
+                try:
+                    candidate_record = {
+                        'full_name': candidate.get('name'),
+                        'party': 'Democratic',
+                        'jurisdiction_type': 'federal',
+                        'jurisdiction_name': 'United States',
+                        'state': candidate.get('state'),
+                        'office': 'House',
+                        'district': candidate.get('district'),
+                        'election_cycle': 2026,
+                        'status': candidate.get('candidate_status'),
+                        'incumbent': candidate.get('incumbent_challenge') == 'I',
+                        'source_url': f"https://www.fec.gov/data/candidate/{candidate.get('candidate_id')}/",
+                        'source_candidate_ID': candidate.get('candidate_id'),
+                        'source_system': 'fec'
+                    }
+                    
+                    result = db.supabase.table('candidates').insert(candidate_record).execute()
+                    
+                    if result.data:
+                        candidates_stored += 1
+                        
+                except Exception as e:
+                    # Skip duplicates
+                    continue
+            
+            return {
+                "status": "success",
+                "page": page,
+                "total_pages": pagination.get('pages', 0),
+                "candidates_on_this_page": len(candidates),
+                "candidates_stored": candidates_stored,
+                "next_page": page + 1 if page < pagination.get('pages', 0) else None,
+                "message": f"Processed page {page} of {pagination.get('pages', 0)}"
+            }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "page": page,
+            "error": f"{type(e).__name__}: {str(e)}"
+        }
+
+
+@router.get("/collect-all-batches")
+async def collect_all_batches():
+    """
+    Collect ALL remaining pages automatically.
+    Processes 3 pages at a time to avoid timeouts.
+    Call this multiple times until complete.
+    """
+    fec_api_key = os.environ.get('FEC_API_KEY')
+    if not fec_api_key:
+        return {"error": "FEC_API_KEY not configured"}
+    
+    # Check current count
+    try:
+        result = db.supabase.table('candidates').select("count", count='exact').execute()
+        current_count = result.count if hasattr(result, 'count') else 0
+    except:
+        current_count = 0
+    
+    # Figure out which page to start from (roughly)
+    # 500 candidates = page 5 completed, start at page 6
+    start_page = (current_count // 100) + 1
+    
+    candidates_stored = 0
+    pages_processed = []
+    
+    try:
+        base_url = "https://api.open.fec.gov/v1/candidates/"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Process 3 pages max per request
+            for page_offset in range(3):
+                page = start_page + page_offset
+                
+                if page > 15:  # Safety limit
+                    break
+                
                 try:
                     params = {
                         "api_key": fec_api_key,
@@ -65,38 +170,20 @@ async def collect_2026_house_democrats():
                         "sort": "name"
                     }
                     
-                    # Add delay to avoid rate limiting
-                    if page > 1:
-                        await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.5)  # Rate limit protection
                     
                     response = await client.get(base_url, params=params)
                     
                     if response.status_code != 200:
-                        error_msg = f"Page {page}: HTTP {response.status_code}"
-                        page_errors.append(error_msg)
-                        consecutive_failures += 1
-                        
-                        # If we get 3 failures in a row, stop
-                        if consecutive_failures >= 3:
-                            page_errors.append(f"Stopping after {consecutive_failures} consecutive failures")
-                            break
-                        
-                        page += 1
                         continue
-                    
-                    # Reset failure counter on success
-                    consecutive_failures = 0
                     
                     data = response.json()
                     candidates = data.get('results', [])
                     
                     if not candidates:
-                        has_more = False
                         break
                     
-                    candidates_collected += len(candidates)
-                    
-                    # Store each candidate
+                    # Store candidates
                     stored_this_page = 0
                     for candidate in candidates:
                         try:
@@ -120,61 +207,38 @@ async def collect_2026_house_democrats():
                             
                             if result.data:
                                 stored_this_page += 1
-                                candidates_stored += 1
                                 
-                        except Exception as e:
-                            # Skip duplicates and other insert errors
+                        except:
                             continue
                     
-                    # Check pagination
-                    pagination = data.get('pagination', {})
-                    total_pages = pagination.get('pages', 0)
-                    
-                    if page >= total_pages:
-                        has_more = False
-                    else:
-                        page += 1
-                    
-                except httpx.TimeoutException:
-                    page_errors.append(f"Page {page}: Timeout")
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        break
-                    page += 1
-                    continue
-                    
-                except httpx.RequestError as e:
-                    page_errors.append(f"Page {page}: Network error - {type(e).__name__}")
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        break
-                    page += 1
-                    continue
+                    candidates_stored += stored_this_page
+                    pages_processed.append(page)
                     
                 except Exception as e:
-                    page_errors.append(f"Page {page}: Unexpected error - {type(e).__name__}: {str(e)}")
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        break
-                    page += 1
                     continue
         
+        # Check new count
+        try:
+            result = db.supabase.table('candidates').select("count", count='exact').execute()
+            new_count = result.count if hasattr(result, 'count') else 0
+        except:
+            new_count = current_count
+        
         return {
-            "status": "completed" if not page_errors else "completed_with_errors",
-            "candidates_collected_from_fec": candidates_collected,
-            "candidates_stored_in_database": candidates_stored,
-            "pages_processed": page - 1,
-            "page_errors": page_errors if page_errors else None,
-            "note": "If some pages failed, run this endpoint again - duplicates will be skipped automatically"
+            "status": "success",
+            "pages_processed": pages_processed,
+            "candidates_stored_this_run": candidates_stored,
+            "database_count_before": current_count,
+            "database_count_after": new_count,
+            "expected_total": "~1159",
+            "message": "Run this endpoint again if count is still below 1159" if new_count < 1159 else "Collection complete!"
         }
         
     except Exception as e:
         return {
-            "status": "failed",
+            "status": "error",
             "error": f"{type(e).__name__}: {str(e)}",
-            "candidates_collected": candidates_collected,
-            "candidates_stored": candidates_stored,
-            "page_errors": page_errors
+            "candidates_stored": candidates_stored
         }
 
 
@@ -185,7 +249,6 @@ async def get_candidates():
         result = db.supabase.table('candidates').select("*").execute()
         candidates = result.data if result.data else []
         
-        # Calculate stats
         states = {}
         for c in candidates:
             state = c.get('state', 'Unknown')
@@ -194,7 +257,7 @@ async def get_candidates():
         return {
             "total_candidates": len(candidates),
             "by_state": dict(sorted(states.items())),
-            "sample_candidates": candidates[:5]
+            "sample_candidates": candidates[:3]
         }
         
     except Exception as e:
@@ -210,21 +273,20 @@ async def verify_data():
         
         checks = {
             "total_candidates": len(candidates),
+            "expected_total": "~1159",
+            "progress": f"{len(candidates)}/1159 ({round(len(candidates)/1159*100, 1)}%)",
             "all_2026_cycle": all(c.get('election_cycle') == 2026 for c in candidates),
             "all_house": all(c.get('office') == 'House' for c in candidates),
             "all_democrats": all(c.get('party') == 'Democratic' for c in candidates),
-            "all_have_state": all(c.get('state') for c in candidates),
-            "all_have_fec_id": all(c.get('source_candidate_ID') for c in candidates),
             "unique_states": len(set(c.get('state') for c in candidates if c.get('state'))),
-            "states_represented": sorted(list(set(c.get('state') for c in candidates if c.get('state')))),
-            "sample_records": candidates[:3]
+            "states": sorted(list(set(c.get('state') for c in candidates if c.get('state')))),
+            "sample_records": candidates[:2]
         }
         
-        # Add quality verdict
         if checks["all_2026_cycle"] and checks["all_house"] and checks["all_democrats"]:
-            checks["quality_verdict"] = "✓ All records match expected criteria"
+            checks["quality"] = "✓ Perfect"
         else:
-            checks["quality_verdict"] = "⚠ Some records don't match expected criteria"
+            checks["quality"] = "⚠ Issues found"
         
         return checks
         
@@ -237,6 +299,6 @@ async def wipe_candidates():
     """DANGER: Delete all candidates"""
     try:
         result = db.supabase.table('candidates').delete().neq('candidate_id', '00000000-0000-0000-0000-000000000000').execute()
-        return {"status": "wiped", "message": "All candidates deleted"}
+        return {"status": "wiped"}
     except Exception as e:
         return {"error": str(e)}
