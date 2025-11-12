@@ -1,9 +1,10 @@
-"""FastAPI routes - Schema-Fixed Version"""
+"""FastAPI routes - Robust Collection"""
 from fastapi import APIRouter
 from datetime import datetime
 import httpx
 import os
 from app.db.client import db
+import asyncio
 
 router = APIRouter()
 
@@ -20,7 +21,7 @@ async def health_check():
     
     return {
         "status": "healthy",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "timestamp": datetime.utcnow().isoformat(),
         "database": {
             "status": db_status,
@@ -32,8 +33,8 @@ async def health_check():
 @router.get("/collect-2026-house-democrats")
 async def collect_2026_house_democrats():
     """
-    Collect ONLY 2026 House Democrats from FEC API.
-    Uses CORRECT column names that match our database schema.
+    Collect 2026 House Democrats with robust error handling.
+    Continues processing even if some pages fail.
     """
     fec_api_key = os.environ.get('FEC_API_KEY')
     if not fec_api_key:
@@ -41,92 +42,139 @@ async def collect_2026_house_democrats():
     
     candidates_collected = 0
     candidates_stored = 0
-    errors = []
+    page_errors = []
     
     try:
         base_url = "https://api.open.fec.gov/v1/candidates/"
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Longer timeout for FEC API
+        async with httpx.AsyncClient(timeout=60.0) as client:
             page = 1
             has_more = True
+            consecutive_failures = 0
             
-            while has_more and page <= 50:  # Safety limit
-                params = {
-                    "api_key": fec_api_key,
-                    "election_year": 2026,
-                    "office": "H",  # House only
-                    "party": "DEM",  # Democrats only
-                    "per_page": 100,
-                    "page": page,
-                    "sort": "name"
-                }
-                
-                response = await client.get(base_url, params=params)
-                
-                if response.status_code != 200:
-                    errors.append(f"FEC API error on page {page}: {response.status_code}")
-                    break
-                
-                data = response.json()
-                candidates = data.get('results', [])
-                
-                if not candidates:
-                    has_more = False
-                    break
-                
-                candidates_collected += len(candidates)
-                
-                # Store each candidate with CORRECT column names
-                for candidate in candidates:
-                    try:
-                        # Match exact schema from schema.sql
-                        candidate_record = {
-                            'full_name': candidate.get('name'),  # full_name, NOT candidate_name
-                            'party': 'Democratic',
-                            'jurisdiction_type': 'federal',
-                            'jurisdiction_name': 'United States',
-                            'state': candidate.get('state'),
-                            'office': 'House',
-                            'district': candidate.get('district'),
-                            'election_cycle': 2026,
-                            'status': candidate.get('candidate_status'),  # status, NOT candidate_status
-                            'incumbent': candidate.get('incumbent_challenge') == 'I',
-                            'source_url': f"https://www.fec.gov/data/candidate/{candidate.get('candidate_id')}/",
-                            'source_candidate_ID': candidate.get('candidate_id'),  # Note: capital ID
-                            'source_system': 'fec'
-                        }
+            while has_more and page <= 50:
+                try:
+                    params = {
+                        "api_key": fec_api_key,
+                        "election_year": 2026,
+                        "office": "H",
+                        "party": "DEM",
+                        "per_page": 100,
+                        "page": page,
+                        "sort": "name"
+                    }
+                    
+                    # Add delay to avoid rate limiting
+                    if page > 1:
+                        await asyncio.sleep(0.5)
+                    
+                    response = await client.get(base_url, params=params)
+                    
+                    if response.status_code != 200:
+                        error_msg = f"Page {page}: HTTP {response.status_code}"
+                        page_errors.append(error_msg)
+                        consecutive_failures += 1
                         
-                        # Insert into database
-                        result = db.supabase.table('candidates').insert(candidate_record).execute()
+                        # If we get 3 failures in a row, stop
+                        if consecutive_failures >= 3:
+                            page_errors.append(f"Stopping after {consecutive_failures} consecutive failures")
+                            break
                         
-                        if result.data:
-                            candidates_stored += 1
-                            
-                    except Exception as e:
-                        # Skip duplicates silently
+                        page += 1
                         continue
-                
-                # Check pagination
-                pagination = data.get('pagination', {})
-                if pagination.get('page') >= pagination.get('pages', 0):
-                    has_more = False
-                else:
+                    
+                    # Reset failure counter on success
+                    consecutive_failures = 0
+                    
+                    data = response.json()
+                    candidates = data.get('results', [])
+                    
+                    if not candidates:
+                        has_more = False
+                        break
+                    
+                    candidates_collected += len(candidates)
+                    
+                    # Store each candidate
+                    stored_this_page = 0
+                    for candidate in candidates:
+                        try:
+                            candidate_record = {
+                                'full_name': candidate.get('name'),
+                                'party': 'Democratic',
+                                'jurisdiction_type': 'federal',
+                                'jurisdiction_name': 'United States',
+                                'state': candidate.get('state'),
+                                'office': 'House',
+                                'district': candidate.get('district'),
+                                'election_cycle': 2026,
+                                'status': candidate.get('candidate_status'),
+                                'incumbent': candidate.get('incumbent_challenge') == 'I',
+                                'source_url': f"https://www.fec.gov/data/candidate/{candidate.get('candidate_id')}/",
+                                'source_candidate_ID': candidate.get('candidate_id'),
+                                'source_system': 'fec'
+                            }
+                            
+                            result = db.supabase.table('candidates').insert(candidate_record).execute()
+                            
+                            if result.data:
+                                stored_this_page += 1
+                                candidates_stored += 1
+                                
+                        except Exception as e:
+                            # Skip duplicates and other insert errors
+                            continue
+                    
+                    # Check pagination
+                    pagination = data.get('pagination', {})
+                    total_pages = pagination.get('pages', 0)
+                    
+                    if page >= total_pages:
+                        has_more = False
+                    else:
+                        page += 1
+                    
+                except httpx.TimeoutException:
+                    page_errors.append(f"Page {page}: Timeout")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        break
                     page += 1
+                    continue
+                    
+                except httpx.RequestError as e:
+                    page_errors.append(f"Page {page}: Network error - {type(e).__name__}")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        break
+                    page += 1
+                    continue
+                    
+                except Exception as e:
+                    page_errors.append(f"Page {page}: Unexpected error - {type(e).__name__}: {str(e)}")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        break
+                    page += 1
+                    continue
         
         return {
-            "status": "completed",
+            "status": "completed" if not page_errors else "completed_with_errors",
             "candidates_collected_from_fec": candidates_collected,
             "candidates_stored_in_database": candidates_stored,
-            "pages_processed": page,
-            "errors": errors if errors else None
+            "pages_processed": page - 1,
+            "page_errors": page_errors if page_errors else None,
+            "note": "If some pages failed, run this endpoint again - duplicates will be skipped automatically"
         }
         
     except Exception as e:
         return {
             "status": "failed",
-            "error": str(e),
+            "error": f"{type(e).__name__}: {str(e)}",
             "candidates_collected": candidates_collected,
-            "candidates_stored": candidates_stored
+            "candidates_stored": candidates_stored,
+            "page_errors": page_errors
         }
 
 
@@ -160,7 +208,7 @@ async def verify_data():
         result = db.supabase.table('candidates').select("*").execute()
         candidates = result.data if result.data else []
         
-        return {
+        checks = {
             "total_candidates": len(candidates),
             "all_2026_cycle": all(c.get('election_cycle') == 2026 for c in candidates),
             "all_house": all(c.get('office') == 'House' for c in candidates),
@@ -168,8 +216,17 @@ async def verify_data():
             "all_have_state": all(c.get('state') for c in candidates),
             "all_have_fec_id": all(c.get('source_candidate_ID') for c in candidates),
             "unique_states": len(set(c.get('state') for c in candidates if c.get('state'))),
+            "states_represented": sorted(list(set(c.get('state') for c in candidates if c.get('state')))),
             "sample_records": candidates[:3]
         }
+        
+        # Add quality verdict
+        if checks["all_2026_cycle"] and checks["all_house"] and checks["all_democrats"]:
+            checks["quality_verdict"] = "✓ All records match expected criteria"
+        else:
+            checks["quality_verdict"] = "⚠ Some records don't match expected criteria"
+        
+        return checks
         
     except Exception as e:
         return {"error": str(e)}
