@@ -327,3 +327,298 @@ async def wipe_candidates():
         return {"status": "wiped"}
     except Exception as e:
         return {"error": str(e)}
+"""Add these endpoints to your routes.py for updates and enrichment"""
+
+@router.get("/check-for-new-filings")
+async def check_for_new_filings():
+    """Check FEC for candidates we don't have yet"""
+    fec_api_key = os.environ.get('FEC_API_KEY')
+    if not fec_api_key:
+        return {"error": "FEC_API_KEY not configured"}
+    
+    try:
+        # Get our current FEC IDs
+        all_records = []
+        page_size = 1000
+        offset = 0
+        
+        while True:
+            result = db.supabase.table('candidates')\
+                .select("source_candidate_ID")\
+                .range(offset, offset + page_size - 1)\
+                .execute()
+            
+            if not result.data:
+                break
+            all_records.extend(result.data)
+            if len(result.data) < page_size:
+                break
+            offset += page_size
+        
+        our_fec_ids = set(r.get('source_candidate_ID') for r in all_records if r.get('source_candidate_ID'))
+        
+        # Check FEC for total count
+        base_url = "https://api.open.fec.gov/v1/candidates/"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            params = {
+                "api_key": fec_api_key,
+                "election_year": 2026,
+                "office": "H",
+                "party": "DEM",
+                "per_page": 100,
+                "page": 1
+            }
+            
+            response = await client.get(base_url, params=params)
+            data = response.json()
+            fec_total = data.get('pagination', {}).get('count', 0)
+            fec_pages = data.get('pagination', {}).get('pages', 0)
+            
+            # Quick scan for new candidates
+            new_candidates = []
+            for page in range(1, min(fec_pages + 1, 15)):
+                params['page'] = page
+                await asyncio.sleep(0.3)
+                
+                response = await client.get(base_url, params=params)
+                candidates = response.json().get('results', [])
+                
+                for candidate in candidates:
+                    fec_id = candidate.get('candidate_id')
+                    if fec_id and fec_id not in our_fec_ids:
+                        new_candidates.append({
+                            'fec_id': fec_id,
+                            'name': candidate.get('name'),
+                            'state': candidate.get('state'),
+                            'district': candidate.get('district')
+                        })
+        
+        return {
+            "we_have": len(our_fec_ids),
+            "fec_has": fec_total,
+            "new_filings_found": len(new_candidates),
+            "new_candidates": new_candidates[:20],  # Show first 20
+            "action": "Run /collect-new-filings to add them" if new_candidates else "Database is current"
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.get("/collect-new-filings")
+async def collect_new_filings():
+    """Collect ONLY new candidates we don't have yet"""
+    fec_api_key = os.environ.get('FEC_API_KEY')
+    if not fec_api_key:
+        return {"error": "FEC_API_KEY not configured"}
+    
+    try:
+        # Get our current FEC IDs
+        all_records = []
+        page_size = 1000
+        offset = 0
+        
+        while True:
+            result = db.supabase.table('candidates')\
+                .select("source_candidate_ID")\
+                .range(offset, offset + page_size - 1)\
+                .execute()
+            
+            if not result.data:
+                break
+            all_records.extend(result.data)
+            if len(result.data) < page_size:
+                break
+            offset += page_size
+        
+        our_fec_ids = set(r.get('source_candidate_ID') for r in all_records if r.get('source_candidate_ID'))
+        
+        # Collect new candidates
+        base_url = "https://api.open.fec.gov/v1/candidates/"
+        new_stored = 0
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for page in range(1, 15):
+                params = {
+                    "api_key": fec_api_key,
+                    "election_year": 2026,
+                    "office": "H",
+                    "party": "DEM",
+                    "per_page": 100,
+                    "page": page
+                }
+                
+                await asyncio.sleep(0.3)
+                response = await client.get(base_url, params=params)
+                candidates = response.json().get('results', [])
+                
+                if not candidates:
+                    break
+                
+                for candidate in candidates:
+                    fec_id = candidate.get('candidate_id')
+                    if not fec_id or fec_id in our_fec_ids:
+                        continue
+                    
+                    try:
+                        candidate_record = {
+                            'full_name': candidate.get('name'),
+                            'party': 'Democratic',
+                            'jurisdiction_type': 'federal',
+                            'jurisdiction_name': 'United States',
+                            'state': candidate.get('state'),
+                            'office': 'House',
+                            'district': candidate.get('district'),
+                            'election_cycle': 2026,
+                            'status': candidate.get('candidate_status'),
+                            'incumbent': candidate.get('incumbent_challenge') == 'I',
+                            'source_url': f"https://www.fec.gov/data/candidate/{fec_id}/",
+                            'source_candidate_ID': fec_id,
+                            'source_system': 'fec'
+                        }
+                        
+                        result = db.supabase.table('candidates').insert(candidate_record).execute()
+                        
+                        if result.data:
+                            new_stored += 1
+                            our_fec_ids.add(fec_id)  # Track to avoid duplicates in same run
+                            
+                    except:
+                        continue
+        
+        # Get final count
+        count_result = db.supabase.table('candidates').select("count", count='exact').execute()
+        final_count = count_result.count if hasattr(count_result, 'count') else 0
+        
+        return {
+            "status": "completed",
+            "new_candidates_added": new_stored,
+            "total_candidates_now": final_count,
+            "message": f"Added {new_stored} new filings. Database now has {final_count} candidates."
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.get("/enrich-committee-ids")
+async def enrich_committee_ids():
+    """
+    Enrich candidates with their committee IDs from FEC.
+    Can run in background - takes 5-10 minutes for 1000+ candidates.
+    """
+    fec_api_key = os.environ.get('FEC_API_KEY')
+    if not fec_api_key:
+        return {"error": "FEC_API_KEY not configured"}
+    
+    try:
+        # Get candidates without committee IDs
+        result = db.supabase.table('candidates')\
+            .select("candidate_id, source_candidate_ID, full_name")\
+            .is_('committee_id', 'null')\
+            .limit(200)\
+            .execute()
+        
+        candidates_to_enrich = result.data if result.data else []
+        
+        if not candidates_to_enrich:
+            return {
+                "status": "complete",
+                "message": "All candidates already have committee IDs"
+            }
+        
+        enriched = 0
+        base_url = "https://api.open.fec.gov/v1/candidate/{candidate_id}/committees/"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for candidate in candidates_to_enrich[:100]:  # Process 100 at a time
+                fec_id = candidate.get('source_candidate_ID')
+                if not fec_id:
+                    continue
+                
+                try:
+                    url = base_url.format(candidate_id=fec_id)
+                    params = {"api_key": fec_api_key}
+                    
+                    await asyncio.sleep(0.2)  # Rate limit
+                    
+                    response = await client.get(url, params=params)
+                    if response.status_code != 200:
+                        continue
+                    
+                    data = response.json()
+                    committees = data.get('results', [])
+                    
+                    # Get the most recent committee
+                    if committees:
+                        committee_id = committees[0].get('committee_id')
+                        
+                        if committee_id:
+                            db.supabase.table('candidates')\
+                                .update({'committee_id': committee_id})\
+                                .eq('candidate_id', candidate.get('candidate_id'))\
+                                .execute()
+                            enriched += 1
+                            
+                except:
+                    continue
+        
+        # Check remaining
+        remaining_result = db.supabase.table('candidates')\
+            .select("count", count='exact')\
+            .is_('committee_id', 'null')\
+            .execute()
+        remaining = remaining_result.count if hasattr(remaining_result, 'count') else 0
+        
+        return {
+            "status": "partial" if remaining > 0 else "complete",
+            "enriched_this_run": enriched,
+            "remaining_without_committees": remaining,
+            "message": f"Enriched {enriched} candidates. Run again to continue." if remaining > 0 else "All candidates enriched!"
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.get("/enrichment-status")
+async def enrichment_status():
+    """Check enrichment progress"""
+    try:
+        count_result = db.supabase.table('candidates').select("count", count='exact').execute()
+        total = count_result.count if hasattr(count_result, 'count') else 0
+        
+        # Check committee IDs
+        committee_result = db.supabase.table('candidates')\
+            .select("count", count='exact')\
+            .not_.is_('committee_id', 'null')\
+            .execute()
+        with_committees = committee_result.count if hasattr(committee_result, 'count') else 0
+        
+        # Check occupations
+        occupation_result = db.supabase.table('candidates')\
+            .select("count", count='exact')\
+            .not_.is_('occupation', 'null')\
+            .execute()
+        with_occupations = occupation_result.count if hasattr(occupation_result, 'count') else 0
+        
+        return {
+            "total_candidates": total,
+            "enrichment_progress": {
+                "committee_ids": {
+                    "enriched": with_committees,
+                    "remaining": total - with_committees,
+                    "percent": round(with_committees / total * 100, 1) if total > 0 else 0
+                },
+                "occupations": {
+                    "enriched": with_occupations,
+                    "remaining": total - with_occupations,
+                    "percent": round(with_occupations / total * 100, 1) if total > 0 else 0
+                }
+            },
+            "next_action": "Run /enrich-committee-ids to start enrichment"
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
