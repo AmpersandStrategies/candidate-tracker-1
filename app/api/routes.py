@@ -726,3 +726,69 @@ async def explore_occupation_data():
         
     except Exception as e:
         return {"error": str(e)}
+
+@router.get("/explore-form2-data")
+async def explore_form2_data():
+    """Check Form 2 (Statement of Candidacy) for occupation data"""
+    fec_api_key = os.environ.get('FEC_API_KEY')
+    if not fec_api_key:
+        return {"error": "FEC_API_KEY not configured"}
+    
+    try:
+        # Get 5 candidates to test
+        result = db.supabase.table('candidates')\
+            .select("candidate_id, full_name, source_candidate_ID")\
+            .limit(5)\
+            .execute()
+        
+        test_candidates = result.data if result.data else []
+        findings = []
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for candidate in test_candidates:
+                fec_id = candidate.get('source_candidate_ID')
+                
+                # Check Form 2 filings (Statement of Candidacy)
+                try:
+                    url = "https://api.open.fec.gov/v1/filings/"
+                    params = {
+                        "api_key": fec_api_key,
+                        "candidate_id": fec_id,
+                        "form_type": "F2"
+                    }
+                    response = await client.get(url, params=params)
+                    if response.status_code == 200:
+                        filings = response.json().get('results', [])
+                        if filings:
+                            latest = filings[0]
+                            # Get ALL fields to see what's available
+                            findings.append({
+                                "name": candidate.get('full_name'),
+                                "fec_id": fec_id,
+                                "has_f2_filing": True,
+                                "all_fields": list(latest.keys()),
+                                "full_data": latest
+                            })
+                        else:
+                            findings.append({
+                                "name": candidate.get('full_name'),
+                                "fec_id": fec_id,
+                                "has_f2_filing": False
+                            })
+                except Exception as e:
+                    findings.append({
+                        "name": candidate.get('full_name'),
+                        "fec_id": fec_id,
+                        "error": str(e)
+                    })
+                
+                await asyncio.sleep(0.3)
+        
+        return {
+            "summary": "Exploring Form 2 (Statement of Candidacy) for occupation",
+            "candidates_checked": len(findings),
+            "findings": findings
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
