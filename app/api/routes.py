@@ -727,66 +727,83 @@ async def explore_occupation_data():
     except Exception as e:
         return {"error": str(e)}
 
-@router.get("/explore-form2-data")
-async def explore_form2_data():
-    """Check Form 2 (Statement of Candidacy) for occupation data"""
-    fec_api_key = os.environ.get('FEC_API_KEY')
-    if not fec_api_key:
-        return {"error": "FEC_API_KEY not configured"}
+@router.get("/explore-form2-html")
+async def explore_form2_html():
+    """Check if Form 2 HTML page contains occupation data we can scrape"""
     
     try:
-        # Get 5 candidates to test
+        # Get a candidate with an html_url
         result = db.supabase.table('candidates')\
-            .select("candidate_id, full_name, source_candidate_ID")\
-            .limit(5)\
+            .select("full_name, source_candidate_ID")\
+            .limit(3)\
             .execute()
         
         test_candidates = result.data if result.data else []
         findings = []
         
+        fec_api_key = os.environ.get('FEC_API_KEY')
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             for candidate in test_candidates:
                 fec_id = candidate.get('source_candidate_ID')
                 
-                # Check Form 2 filings (Statement of Candidacy)
-                try:
-                    url = "https://api.open.fec.gov/v1/filings/"
-                    params = {
-                        "api_key": fec_api_key,
-                        "candidate_id": fec_id,
-                        "form_type": "F2"
-                    }
-                    response = await client.get(url, params=params)
-                    if response.status_code == 200:
-                        filings = response.json().get('results', [])
-                        if filings:
-                            latest = filings[0]
-                            # Get ALL fields to see what's available
+                # First get the Form 2 filing to get html_url
+                url = "https://api.open.fec.gov/v1/filings/"
+                params = {
+                    "api_key": fec_api_key,
+                    "candidate_id": fec_id,
+                    "form_type": "F2"
+                }
+                response = await client.get(url, params=params)
+                
+                if response.status_code == 200:
+                    filings = response.json().get('results', [])
+                    if filings and filings[0].get('html_url'):
+                        html_url = filings[0]['html_url']
+                        pdf_url = filings[0].get('pdf_url')
+                        
+                        # Fetch the HTML page
+                        try:
+                            html_response = await client.get(html_url)
+                            html_content = html_response.text
+                            
+                            # Look for occupation-related content
+                            # Check if certain keywords appear
+                            has_occupation_keyword = 'occupation' in html_content.lower()
+                            has_employer_keyword = 'employer' in html_content.lower()
+                            
+                            # Get a snippet of the HTML for analysis
+                            # Find relevant section if it exists
+                            snippet = html_content[:3000] if len(html_content) > 3000 else html_content
+                            
                             findings.append({
                                 "name": candidate.get('full_name'),
                                 "fec_id": fec_id,
-                                "has_f2_filing": True,
-                                "all_fields": list(latest.keys()),
-                                "full_data": latest
+                                "html_url": html_url,
+                                "pdf_url": pdf_url,
+                                "html_length": len(html_content),
+                                "has_occupation_keyword": has_occupation_keyword,
+                                "has_employer_keyword": has_employer_keyword,
+                                "html_snippet": snippet
                             })
-                        else:
+                        except Exception as e:
                             findings.append({
                                 "name": candidate.get('full_name'),
                                 "fec_id": fec_id,
-                                "has_f2_filing": False
+                                "html_url": html_url,
+                                "error": f"Failed to fetch HTML: {str(e)}"
                             })
-                except Exception as e:
-                    findings.append({
-                        "name": candidate.get('full_name'),
-                        "fec_id": fec_id,
-                        "error": str(e)
-                    })
+                    else:
+                        findings.append({
+                            "name": candidate.get('full_name'),
+                            "fec_id": fec_id,
+                            "note": "No html_url available"
+                        })
                 
                 await asyncio.sleep(0.3)
         
         return {
-            "summary": "Exploring Form 2 (Statement of Candidacy) for occupation",
-            "candidates_checked": len(findings),
+            "summary": "Exploring Form 2 HTML pages for occupation data",
             "findings": findings
         }
         
