@@ -622,3 +622,107 @@ async def enrichment_status():
         
     except Exception as e:
         return {"error": str(e)}
+
+@router.get("/explore-occupation-data")
+async def explore_occupation_data():
+    """Check what occupation data FEC provides for our candidates"""
+    fec_api_key = os.environ.get('FEC_API_KEY')
+    if not fec_api_key:
+        return {"error": "FEC_API_KEY not configured"}
+    
+    try:
+        # Get 5 candidates WITH committee IDs to test
+        result = db.supabase.table('candidates')\
+            .select("candidate_id, full_name, source_candidate_ID, committee_id")\
+            .not_.is_('committee_id', 'null')\
+            .limit(5)\
+            .execute()
+        
+        test_candidates = result.data if result.data else []
+        
+        if not test_candidates:
+            return {"error": "No candidates with committee IDs yet. Run committee enrichment first."}
+        
+        findings = []
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for candidate in test_candidates:
+                fec_id = candidate.get('source_candidate_ID')
+                committee_id = candidate.get('committee_id')
+                
+                candidate_data = {}
+                committee_data = {}
+                filing_data = {}
+                
+                # Check 1: Candidate endpoint
+                try:
+                    url = f"https://api.open.fec.gov/v1/candidate/{fec_id}/"
+                    response = await client.get(url, params={"api_key": fec_api_key})
+                    if response.status_code == 200:
+                        data = response.json().get('results', [{}])[0]
+                        candidate_data = {
+                            "has_occupation": 'occupation' in data,
+                            "occupation": data.get('occupation'),
+                            "other_fields": list(data.keys())[:10]
+                        }
+                except:
+                    candidate_data = {"error": "Failed to fetch"}
+                
+                await asyncio.sleep(0.3)
+                
+                # Check 2: Committee endpoint
+                try:
+                    url = f"https://api.open.fec.gov/v1/committee/{committee_id}/"
+                    response = await client.get(url, params={"api_key": fec_api_key})
+                    if response.status_code == 200:
+                        data = response.json().get('results', [{}])[0]
+                        committee_data = {
+                            "has_candidate_info": 'candidate_ids' in data,
+                            "treasurer_name": data.get('treasurer_name'),
+                            "other_fields": list(data.keys())[:10]
+                        }
+                except:
+                    committee_data = {"error": "Failed to fetch"}
+                
+                await asyncio.sleep(0.3)
+                
+                # Check 3: Form 1 filings
+                try:
+                    url = "https://api.open.fec.gov/v1/filings/"
+                    params = {
+                        "api_key": fec_api_key,
+                        "committee_id": committee_id,
+                        "form_type": "F1"
+                    }
+                    response = await client.get(url, params=params)
+                    if response.status_code == 200:
+                        filings = response.json().get('results', [])
+                        if filings:
+                            latest = filings[0]
+                            filing_data = {
+                                "has_f1_filing": True,
+                                "filing_fields": list(latest.keys())[:15],
+                                "sample_data": {k: latest.get(k) for k in ['candidate_name', 'office', 'state'] if k in latest}
+                            }
+                        else:
+                            filing_data = {"has_f1_filing": False}
+                except:
+                    filing_data = {"error": "Failed to fetch"}
+                
+                findings.append({
+                    "name": candidate.get('full_name'),
+                    "fec_id": fec_id,
+                    "committee_id": committee_id,
+                    "candidate_endpoint": candidate_data,
+                    "committee_endpoint": committee_data,
+                    "form1_filings": filing_data
+                })
+        
+        return {
+            "summary": "Exploring FEC data sources for occupation",
+            "candidates_checked": len(findings),
+            "findings": findings
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
